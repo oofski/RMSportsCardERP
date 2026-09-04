@@ -29980,6 +29980,105 @@ button.sor-team:focus-visible {
   line-height: 1.45;
 }
 
+/* ---------- The month-end summary, as a form (RatesTab -> StatementModal) ----
+   TWO LISTS WITH A TOTAL EACH, laid out the way the platform's own screen lays
+   them out. The person filling this in is reading one screen and typing into
+   another, and every re-grouping on the way is a chance to put a figure in the
+   wrong box — so the form does not get to have a better idea about the order.
+
+   A label-left, box-right row rather than the stacked Field/hint pattern the
+   rest of this modal uses: nine stacked fields is a form somebody scrolls, and
+   a document being copied down wants the eye travelling in one column. */
+/* The two lists side by side. Nine money boxes in one column pushed the payout
+   comparison — the line the whole form exists to print — below the fold, and a
+   check nobody scrolls to is a check nobody runs. Collapses to one column when
+   there is not room for two 300px lists. */
+.modal-stmt {
+  max-width: min(880px, 94vw);
+}
+.fin-stmt-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.fin-stmt-group {
+  margin-top: 16px;
+  padding: 12px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.fin-stmt-group h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.fin-stmt-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 3px 0;
+  min-width: 0;
+}
+.fin-stmt-line-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+/* The two the app MODELS. Everything else on this list is a ledger row it
+   already holds, so a disagreement there means missing rows rather than a wrong
+   rate — and which kind of problem you are looking at is the whole reason the
+   lines are typed one by one. Weight, not colour: it is a fact about the figure,
+   not a warning about it. */
+.fin-stmt-line.is-modelled .fin-stmt-line-label {
+  font-weight: 600;
+}
+.fin-stmt-line-label em {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+.fin-stmt-line input {
+  flex: 0 0 148px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* The total the platform prints above its own list, worked out as it is typed —
+   which is what catches a mistyped line while the document is still open. */
+.fin-stmt-total {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.fin-stmt-total b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 560px) {
+  /* The box drops under its label rather than squeezing to nothing. */
+  .fin-stmt-line {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .fin-stmt-line input {
+    flex: 1 1 100%;
+    text-align: left;
+  }
+}
+
 /* ---------- What Whatnot states (RatesTab -> StatementList) ----------
    THE SAME CARD THE RATE PERIODS SIT IN, deliberately: it is the same kind of
    list — a figure, the span it applies to, a note about where it came from, and

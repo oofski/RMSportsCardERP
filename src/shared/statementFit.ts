@@ -44,7 +44,7 @@
  * schedule" drift, and the day they do, this hands somebody a number, the save
  * rejects it, and nothing on screen explains why the app disagreed with itself.
  */
-import { COMMISSION_RATE_MAX, COMMISSION_RATE_MIN } from './financeStreaming'
+import { COMMISSION_RATE_MAX, COMMISSION_RATE_MIN, isDayKey } from './financeStreaming'
 
 /** What the platform's own statement says, typed off the document. */
 export interface StatementActuals {
@@ -619,6 +619,77 @@ export const MODELLED_FEE_LINES: (keyof StatementLines)[] = [
  * all stay null for the same reason: a line the platform does not print is not a
  * charge of nothing.
  */
+/**
+ * EVERYTHING THAT CAN BE WRONG WITH A STATEMENT, AS A SENTENCE, OR NULL.
+ *
+ * ONE COPY, in the contract, called by the form and by the store.
+ *
+ * There were two. The form kept its own and the store kept its own, and they
+ * had already drifted: the store learned to compare the payout against Earnings
+ * rather than Sales — because a light month carrying a large credit can pay out
+ * more than it sold — while the form went on refusing exactly that document with
+ * a sentence telling the operator their figures were the wrong way round. Two
+ * validators is not redundancy, it is one rule and one lie, and there is no way
+ * to tell from either side which is which.
+ *
+ * The store still calls it too, and must: a renderer check is a courtesy to the
+ * person typing, never a guarantee about what arrives.
+ */
+export function statementProblem(input: StatementInput): string | null {
+  if (!isDayKey(String(input?.fromDate ?? ''))) return 'The start date is not a real date.'
+  if (!isDayKey(String(input?.toDate ?? ''))) return 'The end date is not a real date.'
+  if (String(input.toDate) < String(input.fromDate)) return 'The end date is before the start date.'
+
+  const gross = Number(input?.statedGross)
+  // Number('') is 0, so an empty box would otherwise be stored as a stated zero
+  // and then reported as revenue overshooting by the whole month.
+  if (!Number.isFinite(gross) || gross <= 0) {
+    return 'Enter the sales figure the platform states for this window.'
+  }
+  if (gross > 100_000_000) return 'That figure is larger than this app will accept.'
+
+  // EVERY LINE OF THE MONTH-END SUMMARY IS POSITIVE. The platform prints the six
+  // fee lines as amounts taken OFF, so a minus in one of those boxes is somebody
+  // typing what they think the arithmetic wants rather than what the document
+  // says — and it would book a cost as income.
+  for (const k of [...EARNING_LINES, ...FEE_LINES]) {
+    const v = (input as unknown as Record<string, unknown>)?.[k]
+    if (v === undefined || v === null || v === '') continue
+    const n = Number(v)
+    if (!Number.isFinite(n)) return 'One of the figures is not a number.'
+    if (n < 0) {
+      return 'Enter every line as the platform prints it, as a positive amount — the fees are already understood to be money off.'
+    }
+  }
+
+  const totals = statementTotals(input)
+
+  if (input?.statedFees !== undefined && input.statedFees !== null) {
+    const fees = Number(input.statedFees)
+    if (!Number.isFinite(fees) || fees < 0) return 'The fees figure is not a number.'
+    if (fees >= totals.earnings) return 'The fees cannot be the whole of what was credited.'
+  }
+
+  // The six lines against the total printed above them, caught while the
+  // operator still has the document open — the only moment it is cheap to fix.
+  if (totals.problem) return totals.problem
+
+  if (input?.statedPayout !== undefined && input.statedPayout !== null) {
+    const paid = Number(input.statedPayout)
+    if (!Number.isFinite(paid) || paid < 0) return 'The payout figure is not a number.'
+    // Above EARNINGS is absurd for a window — the platform would have paid out
+    // more than it took. Almost always the two boxes hold each other's figure.
+    //
+    // Earnings, not sales: tips and credits are money the platform did hand
+    // over, so a light month with a large adjustment can legitimately pay out
+    // more than it sold, and refusing that would refuse a true document.
+    if (paid > totals.earnings) {
+      return 'The payout is larger than everything the platform credited, which cannot be right for a whole window — are the two figures the other way round?'
+    }
+  }
+  return null
+}
+
 export function statementInputFromRaw(raw: unknown): StatementInput {
   const r = (raw ?? {}) as Record<string, unknown>
   const text = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v))

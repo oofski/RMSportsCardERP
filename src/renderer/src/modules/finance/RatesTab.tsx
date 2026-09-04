@@ -45,7 +45,9 @@ import {
   type StatementFit,
   type StatementInput,
   type WhatnotStatement,
-  payoutCheck
+  payoutCheck,
+  statementProblem,
+  statementTotals
 } from '@shared/statementFit'
 
 /**
@@ -860,6 +862,29 @@ function DayCoverage({
   const totals = useMemo(() => reconTotals(rows), [rows])
 
   /**
+   * WHAT THE LEDGER HOLDS for an arbitrary window — not the one on screen.
+   *
+   * The statement form asks about the dates being TYPED into it, which are
+   * usually not the dates the table below is showing: somebody filing April
+   * while looking at May is the ordinary case. So this takes its own bounds
+   * rather than closing over `from`/`to`.
+   *
+   * `ledgerNet` and not `netPaid`: the comparison is against the platform's
+   * payout, which covers every row it wrote — refunds, shipping, boosts and all
+   * — while `netPaid` is the sale rows alone. Comparing the payout with the
+   * sales would show a gap on every window that ever shipped a parcel.
+   */
+  const ledgerNetFor = useCallback(
+    (f: string, t: string): number | null => {
+      if (!isDayKey(f) || !isDayKey(t) || t < f) return null
+      const within = reconInRange(all, f, t)
+      if (within.length === 0) return null
+      return reconTotals(within).ledgerNet
+    },
+    [all]
+  )
+
+  /**
    * IS THIS WINDOW FIT TO BE COMPARED WITH AN OUTSIDE DOCUMENT?
    *
    * Judged ONCE, here, and handed to both panels — so the two can never disagree
@@ -944,6 +969,7 @@ function DayCoverage({
         canManage={canManage}
         activeFrom={from}
         activeTo={to}
+        ledgerNetFor={ledgerNetFor}
         onPick={(s) => setRange({ from: s.fromDate, to: s.toDate })}
         onSaved={setStatements}
       />
@@ -1799,6 +1825,7 @@ function StatementList({
   canManage,
   activeFrom,
   activeTo,
+  ledgerNetFor,
   onPick,
   onSaved
 }: {
@@ -1808,6 +1835,8 @@ function StatementList({
   /** The window on screen, so the row it came from can say so. */
   activeFrom: string
   activeTo: string
+  /** What the ledger holds for any window, so the form can check itself. */
+  ledgerNetFor: (from: string, to: string) => number | null
   onPick: (statement: WhatnotStatement) => void
   onSaved: (next: WhatnotStatement[]) => void
 }): JSX.Element | null {
@@ -1926,6 +1955,7 @@ function StatementList({
           statement={editing === 'new' ? null : editing}
           defaultFrom={activeFrom}
           defaultTo={activeTo}
+          ledgerNetFor={ledgerNetFor}
           onClose={() => setEditing(null)}
           onSaved={(next) => {
             onSaved(next)
@@ -1964,71 +1994,80 @@ function StatementList({
 }
 
 /**
- * EVERYTHING THAT CAN BE WRONG WITH A STATED FIGURE, as a sentence, or null.
+ * One money box on the month-end form.
  *
- * These are the store's own rules restated, NOT a second opinion about them.
- * `validateStatement` runs inside the write in `src/main/db/whatnotStatements.ts`
- * and is the authority; it cannot be imported here, because nothing in
- * `src/main` can follow the bridge into a browser bundle. The value of the copy
- * is that a reversed pair of dates is caught while somebody is still looking at
- * the field rather than after they press save. When the two drift, the store
- * wins — its message is what the toast prints.
- *
- * NaN reaches here for a blank box, deliberately: `Number('')` is 0 and a stated
- * gross of zero is a claim that the window sold nothing, which the revenue check
- * would then report as the app overshooting by the whole month.
+ * Nine of these, so it is a component rather than nine copies: the boxes differ
+ * only in their label and their placeholder, and nine hand-written copies is
+ * nine places for one to be wired to the wrong piece of state — a mistake that
+ * would not throw, because every one of these figures is a plausible amount in
+ * any of the others' places.
  */
-function statementProblem(
-  fromDate: string,
-  toDate: string,
-  gross: number,
-  fees: number | null,
-  payout: number | null
-): string | null {
-  if (!isDayKey(fromDate)) return 'The start date is not a real date.'
-  if (!isDayKey(toDate)) return 'The end date is not a real date.'
-  if (toDate < fromDate) return 'The end date is before the start date.'
-  if (!Number.isFinite(gross) || gross <= 0) {
-    return 'Enter the sales figure the platform states for this window.'
-  }
-  if (fees !== null) {
-    if (!Number.isFinite(fees) || fees < 0) return 'The fees figure is not a number.'
-    if (fees >= gross) return 'The fees cannot be the whole of the sales.'
-  }
-  if (payout !== null) {
-    if (!Number.isFinite(payout) || payout < 0) return 'The payout figure is not a number.'
-    // A payout ABOVE sales would mean the platform paid out more than it took,
-    // which is possible for one day and absurd for a whole window. Almost always
-    // the two boxes have each other's figure in them.
-    if (payout > gross) {
-      return 'The payout is larger than the sales, which cannot be right for a whole window — are the two figures the other way round?'
-    }
-  }
-  return null
+function MoneyLine({
+  label,
+  value,
+  onChange,
+  hint,
+  strong
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  hint?: string
+  /** The two this app MODELS rather than reads. They are what the fit solves. */
+  strong?: boolean
+}): JSX.Element {
+  return (
+    <label className={`fin-stmt-line${strong ? ' is-modelled' : ''}`}>
+      <span className="fin-stmt-line-label">
+        {label}
+        {hint ? <em>{hint}</em> : null}
+      </span>
+      <Input
+        type="text"
+        inputMode="decimal"
+        placeholder="0.00"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  )
 }
 
 /**
- * Add or edit one stated figure.
+ * Add or edit one stated figure — Whatnot's month-end summary, line for line.
  *
- * Shaped like the rate form above it on purpose — same Modal, same Field hints,
- * same "nothing is saved until you press the button" footer — because it is the
- * same job on the other half of the comparison, and the checks it runs are
- * `statementProblem` above, which is the store's own validator restated.
+ * ## The form is the document
+ *
+ * Two lists with a total each, in the platform's own order and its own words,
+ * because the person filling this in is reading one screen and typing into
+ * another and every re-grouping on the way is a chance to put a figure in the
+ * wrong box. The two totals are computed and shown as they are typed, so a
+ * mistyped line is caught against the document's own printed total while the
+ * document is still open.
+ *
+ * ## The line that is worth the whole form
+ *
+ * Earnings minus Fees and costs is the money the platform actually sent, and it
+ * is the ONLY figure on the document this app holds an independent copy of — the
+ * ledger records each row's amount rather than deriving it. So the form can
+ * answer, before anything is saved and before any question of rates arises,
+ * whether the app is holding the right set of orders at all. That is the check
+ * the owner has been missing: a gap here is rows, a gap anywhere else is rates,
+ * and until now nothing could tell them apart.
  *
  * ## Blank is not zero
  *
- * `Number('')` is 0, and a stated gross of zero is not "nothing was entered" —
- * it is a claim that the window sold nothing, which the revenue check would then
- * report as the app overshooting by the entire month. The empty string is
- * refused here and refused again in the store. Fees and payout are the mirror
- * image: blank means NOT STATED, which is ordinary and must reach the bridge as
- * null rather than as a zero the payout check would read as "Whatnot paid
- * nothing".
+ * `Number('')` is 0, and a stated zero is a claim — that the platform charged
+ * nothing under that heading, or that the window sold nothing. Every optional
+ * box reaches the bridge as null when it is empty, and the required one is
+ * refused rather than smoothed. NaN for a blank box is deliberate for exactly
+ * this reason, here and in the rate form above.
  */
 function StatementModal({
   statement,
   defaultFrom,
   defaultTo,
+  ledgerNetFor,
   onClose,
   onSaved
 }: {
@@ -2037,52 +2076,98 @@ function StatementModal({
    *  looked at, so the form opens on them rather than on today. */
   defaultFrom: string
   defaultTo: string
+  /**
+   * What the LEDGER holds for a window — the sum of every attributed row's own
+   * amount, recorded and not derived. Passed in rather than fetched because the
+   * panel around this form has already built it, and a second read could answer
+   * differently from the table the operator is looking at.
+   */
+  ledgerNetFor: (from: string, to: string) => number | null
   onClose: () => void
   onSaved: (next: WhatnotStatement[]) => void
 }): JSX.Element {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
-  const text = (v: number | null): string => (v === null || v === undefined ? '' : String(v))
+  const text = (v: number | null | undefined): string =>
+    v === null || v === undefined ? '' : String(v)
+
   const [fromDate, setFromDate] = useState(statement?.fromDate ?? defaultFrom ?? '')
   const [toDate, setToDate] = useState(statement?.toDate ?? defaultTo ?? '')
-  const [gross, setGross] = useState(statement ? text(statement.statedGross) : '')
-  const [fees, setFees] = useState(statement ? text(statement.statedFees) : '')
-  const [payout, setPayout] = useState(statement ? text(statement.statedPayout) : '')
   const [note, setNote] = useState(statement?.note ?? '')
 
-  // NaN for a blank box rather than 0, so an empty field cannot be smoothed into
-  // a stated figure of zero on its way to the validator. Same rule the rate form
-  // above keeps, and for the same reason.
+  // One piece of state per printed line, keyed by the contract's own field name
+  // so the object handed to the bridge is built by spreading rather than by
+  // listing — the listing is what dropped the payout field once already.
+  const [lines, setLines] = useState<Record<string, string>>(() => ({
+    statedGross: text(statement?.statedGross),
+    statedTips: text(statement?.statedTips),
+    statedOtherIn: text(statement?.statedOtherIn),
+    statedCommission: text(statement?.statedCommission),
+    statedProcessing: text(statement?.statedProcessing),
+    statedShipping: text(statement?.statedShipping),
+    statedSurcharges: text(statement?.statedSurcharges),
+    statedRefunds: text(statement?.statedRefunds),
+    statedOtherOut: text(statement?.statedOtherOut)
+  }))
+  const set = (k: string) => (v: string): void => setLines((p) => ({ ...p, [k]: v }))
+
+  /** NaN for a blank box rather than 0 — see the note on this component. */
   const num = (v: string): number => {
     const t = (v || '').replace(/[^0-9.-]/g, '').trim()
     return t === '' ? Number.NaN : Number(t)
   }
-  const grossValue = num(gross)
-  const payoutValue = payout.trim() === '' ? null : num(payout)
-  const feesValue = fees.trim() === '' ? null : num(fees)
+  const optional = (v: string): number | null => (v.trim() === '' ? null : num(v))
 
-  const problem = statementProblem(fromDate, toDate, grossValue, feesValue, payoutValue)
+  const input: StatementInput = useMemo(
+    () => ({
+      id: statement?.id,
+      fromDate,
+      toDate,
+      statedGross: num(lines.statedGross),
+      // A statement typed line by line has no separate total to state: the six
+      // lines ARE the total, and `statementTotals` adds them up. Sending one as
+      // well would be a second figure that can disagree with the first.
+      statedFees: null,
+      statedPayout: null,
+      statedTips: optional(lines.statedTips),
+      statedOtherIn: optional(lines.statedOtherIn),
+      statedCommission: optional(lines.statedCommission),
+      statedProcessing: optional(lines.statedProcessing),
+      statedShipping: optional(lines.statedShipping),
+      statedSurcharges: optional(lines.statedSurcharges),
+      statedRefunds: optional(lines.statedRefunds),
+      statedOtherOut: optional(lines.statedOtherOut),
+      note
+    }),
+    [statement?.id, fromDate, toDate, lines, note]
+  )
+
+  const totals = useMemo(() => statementTotals(input), [input])
+  const problem = statementProblem(input)
+
+  // THE COMPARISON, live. Both sides are recorded money — the platform's own
+  // arithmetic on one side, the ledger's Amount column on the other — so this
+  // says whether the right rows are held without assuming anything about rates.
+  const held = useMemo(
+    () => (isDayKey(fromDate) && isDayKey(toDate) && toDate >= fromDate ? ledgerNetFor(fromDate, toDate) : null),
+    [ledgerNetFor, fromDate, toDate]
+  )
+  const gap = totals.payout !== null && held !== null ? Math.round((totals.payout - held) * 100) / 100 : null
 
   const save = async (): Promise<void> => {
     if (problem) return
     setBusy(true)
     try {
-      const input: StatementInput = {
-        id: statement?.id,
-        fromDate,
-        toDate,
-        statedGross: grossValue,
-        statedFees: feesValue,
-        statedPayout: payoutValue,
-        note
-      }
-      const res = await finance.saveStatement(input)
+      // The fees total IS stored, computed from the lines, because the reads
+      // that predate the itemised form still ask for it and a statement that
+      // itemises should not look emptier to them than one that does not.
+      const res = await finance.saveStatement({ ...input, statedFees: totals.feesTotal, statedPayout: totals.payout })
       if (!res.ok || !res.data) {
         toast.error(resultError(res, 'That figure could not be saved.'))
         return
       }
       onSaved(res.data)
-      toast.success(`${fmtMoney(grossValue)} saved for ${dayRangeLabel(fromDate, toDate)}.`)
+      toast.success(`${fmtMoney(totals.earnings)} saved for ${dayRangeLabel(fromDate, toDate)}.`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'That figure could not be saved.')
     } finally {
@@ -2093,6 +2178,12 @@ function StatementModal({
   return (
     <Modal
       title={statement ? 'Edit this stated figure' : 'Add what Whatnot states'}
+      // Wide, and the two lists sit side by side inside it, because the line
+      // worth the whole form is the payout comparison at the bottom — and in a
+      // single column it fell below the fold behind nine money boxes, which is
+      // the one place it cannot do its job from.
+      wide
+      className="modal-stmt"
       onClose={() => (busy ? undefined : onClose())}
       footer={
         <>
@@ -2125,70 +2216,152 @@ function StatementModal({
         <Field label="To" hint="Inclusive — the last show night this document covers.">
           <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
         </Field>
-        <Field
-          label="Sales the document states"
-          hint="What the platform says the window SOLD, before anything came off. The figure the app's revenue is checked against."
-        >
-          <Input
-            type="text"
-            inputMode="decimal"
-            placeholder="306977.00"
-            value={gross}
-            invalid={!!problem && !Number.isFinite(grossValue)}
-            onChange={(e) => setGross(e.target.value)}
-          />
-        </Field>
-        <Field
-          label="Paid out (optional)"
-          // The most useful field on the form, and the one a dashboard reading
-          // does not have. Both sides of that comparison are RECORDED money, so
-          // it is the one check that cannot be wrong for a fee schedule's
-          // reasons — and it is what says whether the app is even holding the
-          // right set of orders before any rate is argued about.
-          hint="What actually landed in the bank. Blank when the document does not say — it is not zero."
-        >
-          <Input
-            type="text"
-            inputMode="decimal"
-            placeholder="369362.53"
-            value={payout}
-            onChange={(e) => setPayout(e.target.value)}
-          />
-        </Field>
-        <Field
-          label="Fees (optional)"
-          hint="What the document says came off. Blank when it does not itemise them."
-        >
-          <Input
-            type="text"
-            inputMode="decimal"
-            placeholder="14231.90"
-            value={fees}
-            onChange={(e) => setFees(e.target.value)}
-          />
-        </Field>
-        <Field label="Note" hint="Which document this came off — the statement, the dashboard, a 1099.">
-          <Input
-            type="text"
-            maxLength={200}
-            value={note}
-            placeholder="July statement PDF…"
-            onChange={(e) => setNote(e.target.value)}
-          />
-        </Field>
       </div>
 
+      <div className="fin-stmt-groups">
+      <div className="fin-stmt-group">
+        <h4>Earnings</h4>
+        <MoneyLine label="Sales" value={lines.statedGross} onChange={set('statedGross')} />
+        <MoneyLine label="Tips" value={lines.statedTips} onChange={set('statedTips')} />
+        <MoneyLine
+          label="Other adjustments (+)"
+          value={lines.statedOtherIn}
+          onChange={set('statedOtherIn')}
+        />
+        <p className="fin-stmt-total">
+          <span>Earnings</span>
+          <b>{fmtMoney(totals.earnings)}</b>
+        </p>
+      </div>
+
+      <div className="fin-stmt-group">
+        <h4>Fees &amp; costs</h4>
+        {/* The first two are marked because they are the only two this app
+            MODELS. The four below them are already ledger rows it holds, so a
+            disagreement there means missing rows, not a wrong rate — which is
+            the whole reason the lines are typed separately. */}
+        <MoneyLine
+          label="Commission fees"
+          hint="the app models this"
+          strong
+          value={lines.statedCommission}
+          onChange={set('statedCommission')}
+        />
+        <MoneyLine
+          label="Payment processing fees"
+          hint="the app models this"
+          strong
+          value={lines.statedProcessing}
+          onChange={set('statedProcessing')}
+        />
+        <MoneyLine
+          label="Seller paid shipping &amp; handling"
+          value={lines.statedShipping}
+          onChange={set('statedShipping')}
+        />
+        <MoneyLine
+          label="Shipping surcharges and fees"
+          value={lines.statedSurcharges}
+          onChange={set('statedSurcharges')}
+        />
+        <MoneyLine label="Order refunds" value={lines.statedRefunds} onChange={set('statedRefunds')} />
+        <MoneyLine
+          label="Other adjustments (−)"
+          value={lines.statedOtherOut}
+          onChange={set('statedOtherOut')}
+        />
+        <p className="fin-stmt-total">
+          <span>Fees &amp; costs</span>
+          <b>{totals.feesTotal === null ? '—' : fmtMoney(totals.feesTotal)}</b>
+        </p>
+      </div>
+      </div>
+
+      {/* BEFORE THE NOTE, not after it. This is the sentence the form exists to
+          print, and a person who has just typed eleven figures stops reading at
+          the last box — so it goes where the eye already is. */}
       {problem ? (
         <Note tone="danger" icon="AlertTriangle" role="alert">
           <p>{problem}</p>
         </Note>
       ) : (
-        <p className="fin-confirm-lead">
-          Saving this changes <b>no figure the app derives</b>. It files what Whatnot said about
-          these days, so the checks below the table have something from outside the app to compare
-          against — and so the next person does not type it off the same document again.
+        <PayoutAgreement payout={totals.payout} held={held} gap={gap} />
+      )}
+
+      <Field label="Note" hint="Which document this came off — the statement, the dashboard, a 1099.">
+        <Input
+          type="text"
+          maxLength={200}
+          value={note}
+          placeholder="April month-end summary…"
+          onChange={(e) => setNote(e.target.value)}
+        />
+      </Field>
+
+    </Modal>
+  )
+}
+
+/**
+ * WHAT THE PLATFORM SENT, AGAINST WHAT THE LEDGER HOLDS.
+ *
+ * Both sides are recorded rather than modelled, so this comparison contains no
+ * fee schedule and cannot be wrong for the reasons a fitted rate can. It is the
+ * one question worth asking first: a gap here means the app is holding a
+ * different set of orders from the ones the document covers, and no rate — no
+ * matter how carefully solved — can fix that or even see it.
+ *
+ * The tolerance is a dollar, which is per-row rounding over a month. Anything
+ * larger is named in full rather than softened, because the size is the whole
+ * diagnosis and a sentence that says "close enough" about $9,000 is worse than
+ * no sentence.
+ */
+function PayoutAgreement({
+  payout,
+  held,
+  gap
+}: {
+  payout: number | null
+  held: number | null
+  gap: number | null
+}): JSX.Element {
+  if (payout === null) {
+    return (
+      <p className="fin-confirm-lead">
+        Saving this changes <b>no figure the app derives</b>. Fill in the fees and this will also
+        say whether the money Whatnot sent matches the money the ledger holds for these days.
+      </p>
+    )
+  }
+  if (held === null) {
+    return (
+      <p className="fin-confirm-lead">
+        Whatnot sent <b>{fmtMoney(payout)}</b> for this window. There is nothing imported for these
+        days to compare it against yet.
+      </p>
+    )
+  }
+  const agrees = gap !== null && Math.abs(gap) < 1
+  return (
+    <Note tone={agrees ? 'good' : 'warn'} icon={agrees ? 'Check' : 'AlertTriangle'}>
+      <b>
+        Whatnot sent {fmtMoney(payout)}; the ledger holds {fmtMoney(held)} for these days.
+      </b>
+      {agrees ? (
+        <p>
+          They agree, so the app is holding the right orders for this window. Anything the revenue
+          figure is out by from here is the <b>rates</b>, not the rows — which is the question the
+          fit below can answer.
+        </p>
+      ) : (
+        <p>
+          They are <b>{fmtMoney(Math.abs(gap ?? 0))}</b> apart
+          {gap !== null && gap > 0 ? ' — the document is higher' : ' — the ledger is higher'}. Both
+          figures are recorded, not worked out, so no rate explains this: either the window covers
+          different days from the ones the document does, or the import is missing rows or holds
+          rows the document does not. Settle that before fitting anything.
         </p>
       )}
-    </Modal>
+    </Note>
   )
 }

@@ -44,14 +44,13 @@ import type {
   WhatnotStatement
 } from '@shared/statementFit'
 import {
-  FEE_LINES,
   fitFromGross,
   grossFitVerdict,
   payoutCheck,
-  statementTotals
+  statementProblem
 } from '@shared/statementFit'
 import type { StreamDayFinance, WhatnotRatePeriod } from '@shared/financeStreaming'
-import { effectiveFeeRates, isDayKey } from '@shared/financeStreaming'
+import { effectiveFeeRates } from '@shared/financeStreaming'
 import { pinTermsFor, reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
 import { getDb } from './database'
 import { newId, nowIso } from '../util'
@@ -176,60 +175,16 @@ export function listStatements(): WhatnotStatement[] {
   return rows.map(toStatement)
 }
 
-/** Everything that can be wrong with one, as a sentence, or null. */
+/**
+ * Everything that can be wrong with one, as a sentence, or null.
+ *
+ * The rule itself lives in the contract, because the form applies it too and two
+ * copies of a validation rule is one rule and one lie. This stays as the name
+ * the store and its callers already use, and as the reminder that a renderer
+ * check is a courtesy — this is the one that has to hold.
+ */
 export function validateStatement(input: StatementInput): string | null {
-  if (!isDayKey(String(input?.fromDate ?? ''))) return 'The start date is not a real date.'
-  if (!isDayKey(String(input?.toDate ?? ''))) return 'The end date is not a real date.'
-  if (String(input.toDate) < String(input.fromDate)) {
-    return 'The end date is before the start date.'
-  }
-  const gross = Number(input?.statedGross)
-  // Number('') is 0, so an empty box would otherwise be stored as a stated zero
-  // and then reported as revenue overshooting by the whole month.
-  if (!Number.isFinite(gross) || gross <= 0) {
-    return 'Enter the sales figure the platform states for this window.'
-  }
-  if (gross > 100_000_000) return 'That figure is larger than this app will accept.'
-  if (input?.statedFees !== undefined && input.statedFees !== null) {
-    const fees = Number(input.statedFees)
-    if (!Number.isFinite(fees) || fees < 0) return 'The fees figure is not a number.'
-    if (fees >= gross) return 'The fees cannot be the whole of the sales.'
-  }
-  // EVERY LINE OF THE MONTH-END SUMMARY IS POSITIVE. The platform prints the six
-  // fee lines as amounts taken OFF, so a minus in one of those boxes is somebody
-  // typing what they think the arithmetic wants rather than what the document
-  // says — and it would book a cost as income.
-  for (const k of [...FEE_LINES, 'statedTips', 'statedOtherIn'] as (keyof StatementLines)[]) {
-    const v = (input as unknown as Record<string, unknown>)?.[k]
-    if (v === undefined || v === null || v === '') continue
-    const n = Number(v)
-    if (!Number.isFinite(n)) return 'One of the figures is not a number.'
-    if (n < 0) {
-      return 'Enter every line as the platform prints it, as a positive amount — the fees are already understood to be money off.'
-    }
-  }
-
-  // The six lines against the total printed above them. Caught here, while the
-  // operator still has the document open, rather than as a figure nobody can
-  // account for a month later.
-  const totals = statementTotals({ ...cleanLines(input), statedGross: gross, statedFees: input?.statedFees })
-  if (totals.problem) return totals.problem
-
-  if (input?.statedPayout !== undefined && input.statedPayout !== null) {
-    const paid = Number(input.statedPayout)
-    if (!Number.isFinite(paid) || paid < 0) return 'The payout figure is not a number.'
-    // A payout above EARNINGS is absurd for a window — it would mean the
-    // platform paid out more than it took. Almost always the gross box has the
-    // payout in it and the payout box has the sales.
-    //
-    // Earnings, not sales, because tips and credits are money the platform did
-    // hand over: a light month for sales with a large adjustment can legitimately
-    // pay out more than it sold, and refusing that would refuse a true document.
-    if (paid > totals.earnings) {
-      return 'The payout is larger than everything the platform credited, which cannot be right for a whole window — are the two figures the other way round?'
-    }
-  }
-  return null
+  return statementProblem({ ...input, ...cleanLines(input) })
 }
 
 function fail(err: unknown): Result<never> {
