@@ -469,7 +469,7 @@ export function grossFitVerdict(fit: GrossFit): {
    from `src/main` can follow it.
    =========================================================================== */
 
-export interface WhatnotStatement {
+export interface WhatnotStatement extends StatementLines {
   id: string
   /** Inclusive business days — the same dating rate periods and shows use. */
   fromDate: string
@@ -508,7 +508,7 @@ export interface WhatnotStatement {
   updatedAt: string
 }
 
-export interface StatementInput {
+export interface StatementInput extends Partial<StatementLines> {
   id?: string
   fromDate: string
   toDate: string
@@ -516,6 +516,218 @@ export interface StatementInput {
   statedFees?: number | null
   statedPayout?: number | null
   note?: string
+}
+
+/* ---------------------------------------------------------------------------
+   THE MONTH-END SCREEN, LINE FOR LINE
+
+   Whatnot's month-end summary is two lists with a total each. The owner, sending
+   one over:
+
+     Earnings $630,062.37 / Sales $620,213.00 / Tips $56.00 / Other adjustments
+     (+) $9,793.37 · Fees & costs $59,613.62 / Commission fees $33,425.57 /
+     Payment processing fees $21,915.50 / Seller Paid Shipping & handling
+     $2,962.71 / Shipping surcharges and fees $1,141.14 / Order refunds $159.00 /
+     Other adjustments (-) $9.70
+
+   ONE FIELD PER PRINTED LINE, in the platform's own order and words, because
+   the person filling this in is reading one screen and typing into another and
+   any re-grouping on the way is a chance to put a figure in the wrong box.
+
+   EVERY LINE IS OPTIONAL AND POSITIVE. Optional because a dashboard reading
+   states sales alone and a check nobody can fill in is a check nobody runs.
+   Positive because that is how the platform prints them: the six under Fees &
+   costs are all money OFF, and a signed column would let a stray minus turn a
+   cost into income with nothing to catch it — the same bargain
+   `finance_expenses` makes.
+
+   WHAT THIS IS FOR. Of the six fee lines only two — commission and payment
+   processing — are modelled by this app; the other four are already ledger rows
+   it holds. So these fields are not decoration: they are what separates "our
+   rates are wrong" from "we are holding the wrong rows", which no figure on any
+   screen could tell apart before.
+   --------------------------------------------------------------------------- */
+export interface StatementLines {
+  /** Earnings: tips buyers added, over and above the sale. */
+  statedTips: number | null
+  /** Earnings: the platform's "Other adjustments (+)" — credits, promotions. */
+  statedOtherIn: number | null
+  /** Fees: the platform's cut of the sale. MODELLED by this app. */
+  statedCommission: number | null
+  /** Fees: the card charge. MODELLED by this app. */
+  statedProcessing: number | null
+  /** Fees: postage the seller paid. A ledger row already. */
+  statedShipping: number | null
+  /** Fees: shipping surcharges. A ledger row already. */
+  statedSurcharges: number | null
+  /** Fees: refunded orders. A ledger row already. */
+  statedRefunds: number | null
+  /** Fees: the platform's "Other adjustments (-)". A ledger row already. */
+  statedOtherOut: number | null
+}
+
+/** Every line, absent. The shape a statement saved before this existed has. */
+export const NO_STATEMENT_LINES: StatementLines = {
+  statedTips: null,
+  statedOtherIn: null,
+  statedCommission: null,
+  statedProcessing: null,
+  statedShipping: null,
+  statedSurcharges: null,
+  statedRefunds: null,
+  statedOtherOut: null
+}
+
+/** The two Earnings lines that are not the sale itself. */
+export const EARNING_LINES: (keyof StatementLines)[] = ['statedTips', 'statedOtherIn']
+
+/** The six under Fees & costs, in the order the platform prints them. */
+export const FEE_LINES: (keyof StatementLines)[] = [
+  'statedCommission',
+  'statedProcessing',
+  'statedShipping',
+  'statedSurcharges',
+  'statedRefunds',
+  'statedOtherOut'
+]
+
+/** The two this app MODELS rather than reads. The rest are ledger rows. */
+export const MODELLED_FEE_LINES: (keyof StatementLines)[] = [
+  'statedCommission',
+  'statedProcessing'
+]
+
+/**
+ * ONE PLACE THAT KNOWS WHAT A STATEMENT IS MADE OF.
+ *
+ * A transport handler that lists the fields itself is a second copy of this
+ * shape, and the two copies drift silently: `statedPayout` sat missing from the
+ * handler's object for a release while the column, the type, the validator and
+ * the read all carried it, so every statement saved with a payout came back
+ * without one and the single check that answers "did the money that moved match
+ * the money we hold" simply never ran. Nothing errored. Nothing could.
+ *
+ * Eleven fields is eleven chances at that, so the mapping lives here, in the
+ * contract both sides already import, and the handler's job is reduced to
+ * calling it. A field added to `StatementInput` and forgotten here is a
+ * TYPE ERROR, not a quiet null.
+ *
+ * WHAT IT COERCES, AND WHY. Every money box goes through Number() rather than a
+ * cast, so a form string that will not parse arrives as NaN and is refused by
+ * the validator — rather than landing as a stated zero, which is a claim the
+ * document never made and which the fit would then chase. Absent, null and empty
+ * all stay null for the same reason: a line the platform does not print is not a
+ * charge of nothing.
+ */
+export function statementInputFromRaw(raw: unknown): StatementInput {
+  const r = (raw ?? {}) as Record<string, unknown>
+  const text = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v))
+  const optional = (v: unknown): number | null =>
+    v === null || v === undefined || v === '' ? null : Number(v)
+  const id = text(r.id).trim()
+  return {
+    id: id || undefined,
+    fromDate: text(r.fromDate).trim(),
+    toDate: text(r.toDate).trim(),
+    statedGross: Number(r.statedGross),
+    statedFees: optional(r.statedFees),
+    statedPayout: optional(r.statedPayout),
+    statedTips: optional(r.statedTips),
+    statedOtherIn: optional(r.statedOtherIn),
+    statedCommission: optional(r.statedCommission),
+    statedProcessing: optional(r.statedProcessing),
+    statedShipping: optional(r.statedShipping),
+    statedSurcharges: optional(r.statedSurcharges),
+    statedRefunds: optional(r.statedRefunds),
+    statedOtherOut: optional(r.statedOtherOut),
+    note: text(r.note).trim()
+  }
+}
+
+export interface StatementTotals {
+  /** Sales + tips + other adjustments (+). The platform's "Earnings". */
+  earnings: number
+  /** The six fee lines added up, or the typed total when they are not itemised. */
+  feesTotal: number | null
+  /**
+   * Earnings − Fees & costs. WHAT THE PLATFORM ACTUALLY SENT.
+   *
+   * The one figure on the whole document that this app already holds an
+   * independent copy of, because the ledger records the amount of every row
+   * rather than deriving it. So it is the only line that can answer "are we
+   * holding the right rows" WITHOUT first assuming the fee model is right.
+   */
+  payout: number | null
+  /** Commission + processing: the part of the fees this app guesses at. */
+  modelledFees: number | null
+  /** True once any line has been filled in. */
+  itemised: boolean
+  /** Set when the lines and a separately typed total disagree. */
+  problem: string | null
+}
+
+const sumLines = (
+  s: Partial<StatementLines>,
+  keys: (keyof StatementLines)[]
+): { total: number; any: boolean } => {
+  let total = 0
+  let any = false
+  for (const k of keys) {
+    const v = s[k]
+    if (v === null || v === undefined) continue
+    const n = Number(v)
+    if (!Number.isFinite(n)) continue
+    total += cents(n)
+    any = true
+  }
+  return { total: total / 100, any }
+}
+
+/**
+ * The two totals the platform prints, worked out from the lines under them.
+ *
+ * DERIVED, NEVER STORED. Whatnot prints Earnings and Fees & costs as the sums of
+ * the lines beneath, so storing them as well would create two figures that can
+ * disagree — and the day they did, nothing would say which was meant. The one
+ * exception is `statedFees` on a statement that was never itemised, which is a
+ * total somebody typed off a screen that showed them nothing finer.
+ *
+ * IT ALSO CHECKS THE TYPING. Given both the lines and a typed total, a
+ * disagreement is a keying error caught while the operator is still looking at
+ * the document — which is the only moment it is cheap to fix.
+ */
+export function statementTotals(
+  s: Partial<StatementLines> & { statedGross: number; statedFees?: number | null }
+): StatementTotals {
+  const gross = Number(s.statedGross) || 0
+  const income = sumLines(s, EARNING_LINES)
+  const fees = sumLines(s, FEE_LINES)
+  const modelled = sumLines(s, MODELLED_FEE_LINES)
+
+  const earnings = Math.round((gross + income.total) * 100) / 100
+  const typedTotal =
+    s.statedFees === null || s.statedFees === undefined ? null : Number(s.statedFees)
+  const feesTotal = fees.any ? fees.total : Number.isFinite(typedTotal as number) ? typedTotal : null
+
+  let problem: string | null = null
+  if (fees.any && typedTotal !== null && Number.isFinite(typedTotal)) {
+    const off = Math.abs(cents(fees.total) - cents(typedTotal as number))
+    if (off > 1) {
+      problem =
+        `The six fee lines come to ${money(fees.total)}, but Fees and costs says ` +
+        `${money(typedTotal as number)} — ${money((cents(fees.total) - cents(typedTotal as number)) / 100)} apart. ` +
+        'One of them has been keyed wrong.'
+    }
+  }
+
+  return {
+    earnings,
+    feesTotal,
+    payout: feesTotal === null ? null : Math.round((earnings - feesTotal) * 100) / 100,
+    modelledFees: modelled.any ? modelled.total : null,
+    itemised: income.any || fees.any,
+    problem
+  }
 }
 
 /**

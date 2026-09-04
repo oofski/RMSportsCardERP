@@ -36,8 +36,20 @@
  * and is the better tool; this path solves the commission from sales alone.
  */
 import type { Result } from '@shared/types'
-import type { PinnedTerms, RevenueCheck, StatementInput, WhatnotStatement } from '@shared/statementFit'
-import { fitFromGross, grossFitVerdict, payoutCheck } from '@shared/statementFit'
+import type {
+  PinnedTerms,
+  RevenueCheck,
+  StatementInput,
+  StatementLines,
+  WhatnotStatement
+} from '@shared/statementFit'
+import {
+  FEE_LINES,
+  fitFromGross,
+  grossFitVerdict,
+  payoutCheck,
+  statementTotals
+} from '@shared/statementFit'
 import type { StreamDayFinance, WhatnotRatePeriod } from '@shared/financeStreaming'
 import { effectiveFeeRates, isDayKey } from '@shared/financeStreaming'
 import { pinTermsFor, reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
@@ -54,10 +66,81 @@ interface StatementRow {
   stated_gross: number
   stated_fees: number | null
   stated_payout: number | null
+  stated_tips: number | null
+  stated_other_in: number | null
+  stated_commission: number | null
+  stated_processing: number | null
+  stated_shipping: number | null
+  stated_surcharges: number | null
+  stated_refunds: number | null
+  stated_other_out: number | null
   note: string | null
   created_at: string
   updated_at: string
 }
+
+/**
+ * Column name for every line of the month-end summary, in the platform's own
+ * printed order.
+ *
+ * ONE TABLE, walked by the reader, the writer and the sanitiser alike. Eight
+ * near-identical fields written out three times is eight chances to transpose
+ * two of them, and a transposition here is silent: the figures are all money,
+ * all optional and all plausible in each other's places, so nothing would throw
+ * and the statement would simply describe a month that never happened.
+ */
+const LINE_COLUMN: Record<keyof StatementLines, string> = {
+  statedTips: 'stated_tips',
+  statedOtherIn: 'stated_other_in',
+  statedCommission: 'stated_commission',
+  statedProcessing: 'stated_processing',
+  statedShipping: 'stated_shipping',
+  statedSurcharges: 'stated_surcharges',
+  statedRefunds: 'stated_refunds',
+  statedOtherOut: 'stated_other_out'
+}
+const LINE_KEYS = Object.keys(LINE_COLUMN) as (keyof StatementLines)[]
+
+/** A money box that was left empty is NOT a stated zero. */
+const optionalMoney = (v: unknown): number | null =>
+  v === undefined || v === null || v === '' ? null : c2(Number(v))
+
+/** The eight as named bind parameters, so neither statement lists them by hand. */
+const lineParams = (s: Partial<StatementLines>): Record<string, number | null> => {
+  const out: Record<string, number | null> = {}
+  for (const k of LINE_KEYS) out[k] = s[k] ?? null
+  return out
+}
+
+/**
+ * Row to contract, and input to row, written out.
+ *
+ * Spelled rather than mapped: the pairing of a camelCase field to its column is
+ * the one thing here a reader has to be able to check by eye, and a loop that
+ * produced it would hide exactly the transposition it was meant to prevent.
+ * LINE_COLUMN keeps the SQL honest; these two keep the objects honest.
+ */
+const readLines = (r: StatementRow): StatementLines => ({
+  statedTips: r.stated_tips ?? null,
+  statedOtherIn: r.stated_other_in ?? null,
+  statedCommission: r.stated_commission ?? null,
+  statedProcessing: r.stated_processing ?? null,
+  statedShipping: r.stated_shipping ?? null,
+  statedSurcharges: r.stated_surcharges ?? null,
+  statedRefunds: r.stated_refunds ?? null,
+  statedOtherOut: r.stated_other_out ?? null
+})
+
+const cleanLines = (i: Partial<StatementLines> | null | undefined): StatementLines => ({
+  statedTips: optionalMoney(i?.statedTips),
+  statedOtherIn: optionalMoney(i?.statedOtherIn),
+  statedCommission: optionalMoney(i?.statedCommission),
+  statedProcessing: optionalMoney(i?.statedProcessing),
+  statedShipping: optionalMoney(i?.statedShipping),
+  statedSurcharges: optionalMoney(i?.statedSurcharges),
+  statedRefunds: optionalMoney(i?.statedRefunds),
+  statedOtherOut: optionalMoney(i?.statedOtherOut)
+})
 
 function toStatement(r: StatementRow): WhatnotStatement {
   return {
@@ -67,6 +150,7 @@ function toStatement(r: StatementRow): WhatnotStatement {
     statedGross: r.stated_gross,
     statedFees: r.stated_fees ?? null,
     statedPayout: r.stated_payout ?? null,
+    ...readLines(r),
     note: r.note ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -82,7 +166,8 @@ function toStatement(r: StatementRow): WhatnotStatement {
 export function listStatements(): WhatnotStatement[] {
   const rows = getDb()
     .prepare(
-      `SELECT id, from_date, to_date, stated_gross, stated_fees, stated_payout, note,
+      `SELECT id, from_date, to_date, stated_gross, stated_fees, stated_payout,
+              ${LINE_KEYS.map((k) => LINE_COLUMN[k]).join(', ')}, note,
               created_at, updated_at
          FROM whatnot_statements
         ORDER BY from_date DESC, rowid DESC`
@@ -110,14 +195,38 @@ export function validateStatement(input: StatementInput): string | null {
     if (!Number.isFinite(fees) || fees < 0) return 'The fees figure is not a number.'
     if (fees >= gross) return 'The fees cannot be the whole of the sales.'
   }
+  // EVERY LINE OF THE MONTH-END SUMMARY IS POSITIVE. The platform prints the six
+  // fee lines as amounts taken OFF, so a minus in one of those boxes is somebody
+  // typing what they think the arithmetic wants rather than what the document
+  // says — and it would book a cost as income.
+  for (const k of [...FEE_LINES, 'statedTips', 'statedOtherIn'] as (keyof StatementLines)[]) {
+    const v = (input as unknown as Record<string, unknown>)?.[k]
+    if (v === undefined || v === null || v === '') continue
+    const n = Number(v)
+    if (!Number.isFinite(n)) return 'One of the figures is not a number.'
+    if (n < 0) {
+      return 'Enter every line as the platform prints it, as a positive amount — the fees are already understood to be money off.'
+    }
+  }
+
+  // The six lines against the total printed above them. Caught here, while the
+  // operator still has the document open, rather than as a figure nobody can
+  // account for a month later.
+  const totals = statementTotals({ ...cleanLines(input), statedGross: gross, statedFees: input?.statedFees })
+  if (totals.problem) return totals.problem
+
   if (input?.statedPayout !== undefined && input.statedPayout !== null) {
     const paid = Number(input.statedPayout)
     if (!Number.isFinite(paid) || paid < 0) return 'The payout figure is not a number.'
-    // A payout ABOVE sales is possible for a day and absurd for a window — it
-    // would mean the platform paid out more than it took. Almost always the
-    // gross box has the payout in it and the payout box has the sales.
-    if (paid > gross) {
-      return 'The payout is larger than the sales, which cannot be right for a whole window — are the two figures the other way round?'
+    // A payout above EARNINGS is absurd for a window — it would mean the
+    // platform paid out more than it took. Almost always the gross box has the
+    // payout in it and the payout box has the sales.
+    //
+    // Earnings, not sales, because tips and credits are money the platform did
+    // hand over: a light month for sales with a large adjustment can legitimately
+    // pay out more than it sold, and refusing that would refuse a true document.
+    if (paid > totals.earnings) {
+      return 'The payout is larger than everything the platform credited, which cannot be right for a whole window — are the two figures the other way round?'
     }
   }
   return null
@@ -153,6 +262,7 @@ export function saveStatement(
       input.statedPayout === ('' as never)
         ? null
         : c2(Number(input.statedPayout)),
+    ...cleanLines(input),
     note: String(input?.note ?? '').trim().slice(0, NOTE_MAX)
   }
 
@@ -167,7 +277,9 @@ export function saveStatement(
         .prepare(
           `UPDATE whatnot_statements
               SET from_date = @from, to_date = @to, stated_gross = @gross,
-                  stated_fees = @fees, stated_payout = @paid, note = @note, updated_at = @ts
+                  stated_fees = @fees, stated_payout = @paid,
+                  ${LINE_KEYS.map((k) => `${LINE_COLUMN[k]} = @${k}`).join(', ')},
+                  note = @note, updated_at = @ts
             WHERE id = @id`
         )
         .run({
@@ -177,6 +289,7 @@ export function saveStatement(
           gross: clean.statedGross,
           fees: clean.statedFees,
           paid: clean.statedPayout ?? null,
+          ...lineParams(clean),
           note: clean.note,
           ts
         })
@@ -184,9 +297,11 @@ export function saveStatement(
     } else {
       db.prepare(
         `INSERT INTO whatnot_statements
-           (id, from_date, to_date, stated_gross, stated_fees, stated_payout, note,
+           (id, from_date, to_date, stated_gross, stated_fees, stated_payout,
+            ${LINE_KEYS.map((k) => LINE_COLUMN[k]).join(', ')}, note,
             created_at, updated_at, created_by)
-         VALUES (@id, @from, @to, @gross, @fees, @paid, @note, @ts, @ts, @by)`
+         VALUES (@id, @from, @to, @gross, @fees, @paid,
+                 ${LINE_KEYS.map((k) => `@${k}`).join(', ')}, @note, @ts, @ts, @by)`
       ).run({
         id: newId(),
         from: clean.fromDate,
@@ -194,6 +309,7 @@ export function saveStatement(
         gross: clean.statedGross,
         fees: clean.statedFees,
         paid: clean.statedPayout ?? null,
+        ...lineParams(clean),
         note: clean.note,
         ts,
         by: actorId

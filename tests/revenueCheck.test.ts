@@ -69,12 +69,21 @@ const {
   validateRatePeriod
 } = require('../src/shared/financeStreaming')
 const {
+  EARNING_LINES,
+  FEE_LINES,
   fitFromGross,
   gapShape,
   grossFitVerdict,
   modelDivisor,
-  payoutCheck
+  payoutCheck,
+  statementInputFromRaw,
+  statementTotals
 } = require('../src/shared/statementFit')
+const {
+  listStatements,
+  saveStatement,
+  validateStatement
+} = require('../src/main/db/whatnotStatements')
 const {
   checkWindow,
   pinTermsFor,
@@ -1189,6 +1198,215 @@ console.log('\n=== 15. THE TWO SCREENS MUST COMPARE THE SAME QUANTITY ===')
   ok(/sales/i.test(none.sentence), 'and so does the never-saved sentence', none.sentence)
 }
 
+
+// ===========================================================================
+console.log('\n=== THE MONTH-END SUMMARY, LINE FOR LINE ===')
+// ===========================================================================
+/*
+ * The owner, sending one over: he wants to type what the platform's month-end
+ * screen prints, all eleven lines of it, and have the app take it from there.
+ *
+ * The shape matters more than any single figure. Whatnot prints two lists and a
+ * total each — Earnings over Sales, Tips, Other adjustments (+); Fees & costs
+ * over Commission, Payment processing, Seller paid shipping, Shipping
+ * surcharges, Order refunds, Other adjustments (-) — and the difference between
+ * the two totals is the money it actually sent.
+ *
+ * WHICH IS THE POINT. Of those six fee lines this app models exactly two. The
+ * other four are ledger rows it already holds, and so is every line under
+ * Earnings. So the split is not bookkeeping: it separates "our commission rate
+ * is wrong" from "we are holding the wrong rows", and nothing on any screen
+ * could tell those apart before.
+ *
+ * Figures below are invented. The repo is public and a real month's takings are
+ * not something to commit; the SHAPE is what is under test.
+ */
+const MONTH = {
+  fromDate: '2026-04-01',
+  toDate: '2026-04-30',
+  statedGross: 400000,      // Sales
+  statedTips: 100,
+  statedOtherIn: 5000,      // Other adjustments (+)   => Earnings 405,100
+  statedCommission: 20000,
+  statedProcessing: 12000,
+  statedShipping: 1500,
+  statedSurcharges: 600,
+  statedRefunds: 200,
+  statedOtherOut: 50        // Fees & costs 34,350     => payout 370,750
+}
+
+{
+  const t = statementTotals(MONTH)
+  ok(t.earnings === 405100, 'Earnings is sales plus tips plus the credits', String(t.earnings))
+  ok(t.feesTotal === 34350, 'Fees and costs is the six lines added up', String(t.feesTotal))
+  ok(
+    t.payout === 370750,
+    'AND THE DIFFERENCE IS THE PAYOUT — the one line the app holds its own copy of',
+    String(t.payout)
+  )
+  ok(
+    t.modelledFees === 32000,
+    'commission and processing are named apart: they are the only two this app guesses',
+    String(t.modelledFees)
+  )
+  ok(t.itemised === true, 'and the statement knows it was itemised')
+  ok(t.problem === null, 'with nothing to complain about', String(t.problem))
+}
+
+// A TYPED TOTAL THAT DOES NOT MATCH ITS OWN LINES is a keying error, and the
+// only cheap moment to catch it is while the document is still open.
+{
+  const wrong = statementTotals({ ...MONTH, statedFees: 34000 })
+  ok(!!wrong.problem, 'the six lines are checked against the total printed above them', String(wrong.problem))
+  ok(
+    /34,350/.test(wrong.problem || '') && /34,000/.test(wrong.problem || ''),
+    'and the sentence quotes both figures so it is obvious which was mistyped',
+    String(wrong.problem)
+  )
+  const right = statementTotals({ ...MONTH, statedFees: 34350 })
+  ok(right.problem === null, 'a total that agrees passes silently', String(right.problem))
+}
+
+// A DASHBOARD READING states sales alone, and must still work — that is the
+// whole reason every line is optional.
+{
+  const bare = statementTotals({ statedGross: 400000, statedFees: 34350 })
+  ok(bare.earnings === 400000, 'with no lines, Earnings is just the sales', String(bare.earnings))
+  ok(bare.feesTotal === 34350, 'and the fees total falls back to the one typed', String(bare.feesTotal))
+  ok(bare.payout === 365650, 'the payout still comes out', String(bare.payout))
+  ok(bare.itemised === false, 'and it knows it was not itemised')
+  ok(bare.modelledFees === null, 'with nothing said about which part is modelled', String(bare.modelledFees))
+}
+
+// AN EMPTY BOX IS NOT A STATED ZERO. Number('') is 0, and a zero here is a
+// claim — "the platform charged nothing under this heading" — which would then
+// be fitted against and reported as a fee that vanished.
+{
+  const none = statementTotals({ statedGross: 1000, statedTips: null, statedCommission: null })
+  ok(none.earnings === 1000, 'an absent tips line adds nothing', String(none.earnings))
+  ok(none.feesTotal === null, 'and absent fee lines are not a fee of zero', String(none.feesTotal))
+  ok(none.payout === null, 'so no payout is claimed either', String(none.payout))
+}
+
+console.log('\n--- what it refuses ---')
+{
+  // The platform prints the fees as amounts taken OFF. A minus in one of those
+  // boxes is somebody typing what they think the arithmetic wants.
+  const neg = validateStatement({ ...MONTH, statedRefunds: -200 })
+  ok(!!neg && /positive/i.test(neg), 'a negative fee line is refused, with the reason', String(neg))
+
+  const bad = validateStatement({ ...MONTH, statedFees: 34000 })
+  ok(!!bad && /keyed wrong/i.test(bad), 'and so is a total that fights its own lines', String(bad))
+
+  // Payout is compared against EARNINGS, not sales: a light month with a large
+  // credit can legitimately pay out more than it sold, and refusing that would
+  // refuse a true document.
+  const between = validateStatement({ ...MONTH, statedGross: 100, statedPayout: 200 })
+  ok(
+    between === null,
+    'a payout above SALES but below earnings is allowed — the credits are real money',
+    String(between)
+  )
+  const over = validateStatement({ ...MONTH, statedPayout: 500000 })
+  ok(!!over, 'a payout above everything credited is still refused', String(over))
+}
+
+console.log('\n--- nothing is lost in transit ---')
+// THE FAILURE THIS EXISTS FOR. `statedPayout` was absent from the transport
+// handler's object for a release: the column, the type, the validator and the
+// read all carried it, so the value was dropped between the form and the store
+// and every saved statement came back with a null the check then skipped. No
+// error, no warning — just a box the operator filled in that did nothing.
+//
+// So the mapping lives in the contract and is asserted field by field HERE,
+// against a raw object shaped like the form's own state, with every figure a
+// string because that is what an <input> yields.
+{
+  const raw = {
+    fromDate: '2026-04-01',
+    toDate: '2026-04-30',
+    statedGross: '400000',
+    statedFees: '34350',
+    statedPayout: '370750',
+    statedTips: '100',
+    statedOtherIn: '5000',
+    statedCommission: '20000',
+    statedProcessing: '12000',
+    statedShipping: '1500',
+    statedSurcharges: '600',
+    statedRefunds: '200',
+    statedOtherOut: '50',
+    note: '  April  '
+  }
+  const mapped = statementInputFromRaw(raw)
+  const dropped = [
+    'statedGross',
+    'statedFees',
+    'statedPayout',
+    ...EARNING_LINES,
+    ...FEE_LINES
+  ].filter((k) => mapped[k] === null || mapped[k] === undefined || Number.isNaN(mapped[k]))
+  ok(dropped.length === 0, 'EVERY FIGURE ON THE DOCUMENT REACHES THE STORE', dropped.join(', ') || 'none')
+  ok(mapped.statedCommission === 20000, 'and as a number, not the string it arrived as', String(mapped.statedCommission))
+  ok(mapped.statedOtherOut === 50, 'including the smallest line', String(mapped.statedOtherOut))
+  ok(mapped.note === 'April', 'the note is trimmed', JSON.stringify(mapped.note))
+  ok(mapped.id === undefined, 'and a blank id means a new row, not an update', String(mapped.id))
+
+  // Empty and absent both stay null, which is the distinction the whole form
+  // rests on — Number('') is 0, and a zero is a claim the document never made.
+  const sparse = statementInputFromRaw({
+    fromDate: '2026-04-01',
+    toDate: '2026-04-30',
+    statedGross: '1000',
+    statedTips: '',
+    statedCommission: '80'
+  })
+  ok(sparse.statedTips === null, 'an empty box is null, not zero', String(sparse.statedTips))
+  ok(sparse.statedRefunds === null, 'and so is a box that was never rendered', String(sparse.statedRefunds))
+  ok(sparse.statedCommission === 80, 'while the one that was typed comes through', String(sparse.statedCommission))
+
+  // A figure that will not parse must arrive as NaN so the validator refuses it,
+  // rather than as a stated zero the fit would then chase.
+  const junk = statementInputFromRaw({ fromDate: 'x', toDate: 'y', statedGross: 'four hundred' })
+  ok(Number.isNaN(junk.statedGross), 'an unparseable figure arrives as NaN, not as zero', String(junk.statedGross))
+  ok(!!validateStatement(junk), 'and is refused', String(validateStatement(junk)))
+}
+
+console.log('\n--- it survives the round trip ---')
+// The payout field spent a release being dropped between the form and the
+// store, silently, because nothing downstream could tell a value that was never
+// sent from one that was never typed. Eight more optional fields is eight more
+// chances at the same silence.
+{
+  const saved = saveStatement({ ...MONTH, note: 'April, typed off the summary' }, null)
+  ok(saved.ok === true, 'the month saves', saved.error || '')
+  const row = listStatements().find((r) => r.fromDate === '2026-04-01')
+  ok(!!row, 'and reads back')
+  if (row) {
+    const missing = [...FEE_LINES, 'statedTips', 'statedOtherIn'].filter(
+      (k) => row[k] === null || row[k] === undefined
+    )
+    ok(missing.length === 0, 'WITH ALL EIGHT LINES INTACT', missing.join(', ') || 'none')
+    ok(row.statedCommission === 20000, 'commission survived', String(row.statedCommission))
+    ok(row.statedOtherOut === 50, 'and so did the smallest line on the document', String(row.statedOtherOut))
+    ok(statementTotals(row).payout === 370750, 'and the payout still comes out of what was stored')
+
+    // A line left blank comes back null, not zero — the distinction the whole
+    // form rests on.
+    const partial = saveStatement(
+      { fromDate: '2026-05-01', toDate: '2026-05-31', statedGross: 1000, statedCommission: 80 },
+      null
+    )
+    ok(partial.ok === true, 'a half-filled statement is ordinary', partial.error || '')
+    const may = listStatements().find((r) => r.fromDate === '2026-05-01')
+    ok(may && may.statedCommission === 80, 'the line that was typed is there', String(may && may.statedCommission))
+    ok(
+      may && may.statedTips === null && may.statedRefunds === null,
+      'AND THE ONES THAT WERE NOT ARE NULL, not zero',
+      may ? `${may.statedTips}/${may.statedRefunds}` : 'no row'
+    )
+  }
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

@@ -4756,6 +4756,43 @@ function migrate(database: Database.Database): void {
   `)
   setMeta(database, 'schema_version', '96')
 
+  // v97: Whatnot's month-end summary, line for line.
+  //
+  // The statement used to hold three figures -- sales, a fees total, a payout --
+  // because that is what a dashboard reading shows. The month-end summary shows
+  // eleven, and the extra eight are the ones that answer the question the three
+  // never could.
+  //
+  // WHY THE DETAIL EARNS ITS COLUMNS. Of the six lines under Fees and costs this
+  // app MODELS exactly two, commission and payment processing; the other four --
+  // seller paid shipping, surcharges, order refunds, other adjustments -- are
+  // already rows in the ledger it imported. So the six typed lines split the
+  // month's cost into the part that can be wrong because a rate is wrong and the
+  // part that can only be wrong because rows are missing. Before this, a gap
+  // could be either and no screen could say which.
+  //
+  // ALL EIGHT ARE NULLABLE AND POSITIVE. Nullable because a statement that
+  // quotes sales alone is ordinary and must still save. Positive because that is
+  // how the platform prints them -- the six are all money off -- and a signed
+  // column would let one stray minus book a cost as income.
+  //
+  // Earnings and Fees and costs are deliberately NOT columns: the platform
+  // prints them as the sums of the lines under them, so storing them too would
+  // create a second figure that can disagree with the first.
+  for (const col of [
+    'stated_tips',
+    'stated_other_in',
+    'stated_commission',
+    'stated_processing',
+    'stated_shipping',
+    'stated_surcharges',
+    'stated_refunds',
+    'stated_other_out'
+  ]) {
+    addColumnIfMissing(database, 'whatnot_statements', col, 'REAL')
+  }
+  setMeta(database, 'schema_version', '97')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in
