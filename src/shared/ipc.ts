@@ -367,6 +367,7 @@ export const IPC = {
   // postage is bought when the parcel goes, which is always after the form
   // that used to be the only way to record it has closed for good.
   invoiceSetShippingCost: 'invoices:set-shipping-cost',
+  invoiceSetPaymentTiming: 'invoices:set-payment-timing',
   invoiceSetForceReady: 'invoices:set-force-ready',
 
   // Purchase orders

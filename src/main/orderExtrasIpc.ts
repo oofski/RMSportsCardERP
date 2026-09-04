@@ -1,4 +1,5 @@
 import { writeFileSync } from 'fs'
+import { asPaymentTiming } from '@shared/freight'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { shell } from 'electron'
@@ -38,6 +39,7 @@ import {
   setInvoiceItemsInHand,
   setInvoiceLineRouting,
   setInvoiceLines,
+  setInvoicePaymentTiming,
   setInvoiceShippingCost,
   setInvoicePaid,
   linkDropshipPair,
@@ -828,6 +830,30 @@ export function registerOrderExtrasIpc(): void {
           return { ok: false, error: 'Postage has to be a number, and not a negative one.' }
         }
         const res = setInvoiceShippingCost(str(payload?.id), cost)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * WHEN THIS BUYER PAYS. See setInvoicePaymentTiming.
+   *
+   * An intention about a deal, revisable like any other — it could only be set
+   * on the create form until now, which is refused the moment an invoice posts.
+   */
+  ipcMain.handle(
+    IPC.invoiceSetPaymentTiming,
+    (_e, payload: { id?: unknown; paymentTiming?: unknown }): Result<InvoiceDetail> => {
+      try {
+        const actor = requireInvoicing()
+        // NOT SAID is a real third answer and clears rather than defaulting —
+        // see PaymentTiming, which keeps null distinct for exactly this reason.
+        const timing = asPaymentTiming(payload?.paymentTiming)
+        const res = setInvoicePaymentTiming(str(payload?.id), timing, actor.id)
         if (res.error) return { ok: false, error: res.error }
         if (!res.invoice) return { ok: false, error: 'That order is gone.' }
         return { ok: true, data: res.invoice }

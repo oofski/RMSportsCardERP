@@ -26,7 +26,7 @@ import type { Permission } from '@shared/permissions'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import type { RestoreCheck, RestoreStatus } from '@shared/restore'
 import type { RevenueCheck, StatementInput, WhatnotStatement } from '@shared/statementFit'
-import type { FreightPatch } from '@shared/freight'
+import type { FreightPatch, PaymentTiming } from '@shared/freight'
 import type { SupplyingOrder } from '@shared/poStock'
 import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
 import type { ShippingPerformanceView } from '@shared/performance'
@@ -2234,6 +2234,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       setShippingCost: (id: string, shippingCost: number | null): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSetShippingCost, { id, shippingCost }),
+      /** When this buyer pays — 'front', 'delivery', or null for not said. */
+      setPaymentTiming: (id: string, paymentTiming: PaymentTiming | null): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetPaymentTiming, { id, paymentTiming }),
 
       /** Send it anyway, ahead of the gates. Recorded as its own decision. */
       setForceReady: (id: string, forced: boolean): Promise<Result<InvoiceDetail>> =>

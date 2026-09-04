@@ -32,6 +32,7 @@ import {
 import type { ScanSoCandidate } from '@shared/types'
 import type Database from 'better-sqlite3'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
+import type { PaymentTiming } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
 import { getDb, getMeta } from './database'
 import {
@@ -4061,6 +4062,72 @@ export function setInvoiceShippingCost(
     nowIso(),
     id
   )
+  return { invoice: getInvoice(id) }
+}
+
+/**
+ * WHEN THIS BUYER PAYS — up front, on delivery, or nobody has said.
+ *
+ * The owner: "in the edit sales order section can you go ahead and let me change
+ * the payment options like on delivery or upon delivery."
+ *
+ * It could only be set on the CREATE form until now, and that form is refused
+ * the moment an invoice posts — so an order written before the terms were agreed
+ * carried "Terms not set" for ever, and one entered wrong could never be put
+ * right. It is an INTENTION about a deal, discovered and revised like any other,
+ * not a fact the document fixes.
+ *
+ * ## What moves when it changes, and what does not
+ *
+ * Nothing about the money. No amount, no date, no ledger row — `paidAt`,
+ * `paidUpFront` and every figure stay exactly as they are, because what somebody
+ * agreed about WHEN to pay is a different fact from whether they have.
+ *
+ * What it does move is the gate: `readyToShipBlockedReason` holds an UNPAID
+ * up-front order off the packing list. Setting an order to up-front while it is
+ * unpaid therefore closes that gate, and setting it to on-delivery opens it. The
+ * gate is read live on every move rather than stamped, so this needs no
+ * re-derivation — and an order ALREADY released stays released, because taking
+ * it back off is a decision somebody makes with the Ready to Ship control, not a
+ * side effect of correcting the terms.
+ *
+ * Refused on a void, which owes nothing and will not be paid on any terms.
+ */
+export function setInvoicePaymentTiming(
+  id: string,
+  timing: PaymentTiming | null,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const row = db.prepare('SELECT id, status, payment_timing FROM invoices WHERE id = ?').get(id) as
+    | { id: string; status: string; payment_timing: string | null }
+    | undefined
+  if (!row) return { invoice: null, error: 'Sales order not found.' }
+  if (row.status === 'void') {
+    return { invoice: getInvoice(id), error: 'That order was voided.' }
+  }
+  const next = timing === 'front' || timing === 'delivery' ? timing : null
+  if (next === asPaymentTiming(row.payment_timing)) return { invoice: getInvoice(id) }
+  db.prepare('UPDATE invoices SET payment_timing = ?, updated_at = ? WHERE id = ?').run(
+    next,
+    nowIso(),
+    id
+  )
+  // LOGGED, because it changes what the packing floor is allowed to do with the
+  // order and "who moved this to up front" is a question that gets asked. Filed
+  // as a note rather than a kind of its own — OrderEventKind has no entry for
+  // terms, and inventing one would mean teaching every filter and chip about a
+  // category that carries one sentence.
+  recordOrderEvent('so', id, 'note', {
+    detail:
+      next === 'front'
+        ? 'Terms set to paid up front'
+        : next === 'delivery'
+          ? 'Terms set to paid on delivery'
+          : 'Terms cleared — nobody has said when this is paid',
+    actorId,
+    db
+  })
   return { invoice: getInvoice(id) }
 }
 

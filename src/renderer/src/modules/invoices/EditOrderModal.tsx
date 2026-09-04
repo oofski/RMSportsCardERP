@@ -3,7 +3,9 @@ import type { InvoiceDetail, InvoiceLine } from '@shared/invoices'
 import { invoiceTotal, lineAmount, money, qboTotalMismatch } from '@shared/invoices'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { api } from '../../lib/api'
-import { Button, Field, Input, Modal } from '../../components/ui'
+import { Button, Checkbox, Field, Input, Modal } from '../../components/ui'
+import { PAYMENT_TIMINGS, togglePayment } from '@shared/freight'
+import type { PaymentTiming } from '@shared/freight'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { newDraftKey } from '../invoicing/helpers'
@@ -115,6 +117,20 @@ export function EditOrderModal({
   const [widthIn, setWidthIn] = useState(dimStr(invoice.widthIn))
   const [heightIn, setHeightIn] = useState(dimStr(invoice.heightIn))
   const [booking, setBooking] = useState(false)
+  /**
+   * WHEN THIS BUYER PAYS, and the one control on this screen that saves ITSELF.
+   *
+   * Every other field here waits for Save because they are all one document —
+   * change three line prices and one press commits the lot. The terms are not
+   * part of that document: they gate whether the packing floor may touch the
+   * order, so leaving them staged behind a Save somebody might cancel would mean
+   * the screen showed one answer while the gate used another.
+   *
+   * Held in state as well so the boxes tick instantly rather than after a round
+   * trip, and reconciled from the saved order when it comes back.
+   */
+  const [timing, setTiming] = useState<PaymentTiming | null>(invoice.paymentTiming ?? null)
+  const [timingBusy, setTimingBusy] = useState(false)
 
   const storedDraft = (l: InvoiceLine): Draft => ({
     parts: [
@@ -279,6 +295,24 @@ export function EditOrderModal({
 
   const gapNow = qboTotalMismatch(invoice)
   const gapAfter = qboTotalMismatch({ ...invoice, total: newTotal })
+
+  const saveTiming = async (next: PaymentTiming | null): Promise<void> => {
+    const was = timing
+    setTiming(next)
+    setTimingBusy(true)
+    try {
+      const res = await api.invoices.setPaymentTiming(invoice.id, next)
+      if (!res.ok || !res.data) {
+        setTiming(was)
+        toast.error(res.error ?? 'Could not change the terms.')
+        return
+      }
+      setTiming(res.data.paymentTiming ?? null)
+      await onDone()
+    } finally {
+      setTimingBusy(false)
+    }
+  }
 
   /** Anything at all to save. Lines or the parcel — either alone is enough. */
   const touched = changedLines.length > 0 || dimsChanged
@@ -638,6 +672,39 @@ export function EditOrderModal({
           </span>
         </p>
       )}
+
+      {/* WHEN THIS BUYER PAYS.
+          
+          The owner: "in the edit sales order section can you go ahead and let me
+          change the payment options like on delivery or upon delivery."
+          
+          It could only be set on the create form, which is refused the moment an
+          invoice posts — so an order written before the terms were agreed said
+          "Terms not set" for ever, and one entered wrong could never be put
+          right. It is an intention about a deal, not a fact the document fixes.
+          
+          SAVES ON THE TICK, unlike everything else here. See the note on the
+          state above: these gate what the packing floor may do, so they must not
+          sit staged behind a Save somebody might cancel. */}
+      <div className="so-edit-section">
+        <h4>When they pay</h4>
+        <p className="p-sub">
+          Nothing ships on an up-front order until the money is in, unless somebody sends it
+          anyway. Untick both if nobody has said yet.
+        </p>
+        <div className="freight-payment-boxes">
+          {PAYMENT_TIMINGS.map((pt) => (
+            <Checkbox
+              key={pt.id}
+              checked={timing === pt.id}
+              label={pt.label}
+              hint={pt.hint}
+              disabled={timingBusy || busy}
+              onChange={() => void saveTiming(togglePayment(timing, pt.id))}
+            />
+          ))}
+        </div>
+      </div>
 
       {/* THE PARCEL. Never on this screen before, and only enterable once
           anywhere else: the fulfilment tick offers "Measure" while an order is
