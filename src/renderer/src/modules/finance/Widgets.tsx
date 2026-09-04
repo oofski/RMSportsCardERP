@@ -239,9 +239,19 @@ export function RangeWidgets({
 
   return (
     <div className="fin-widgets" role="group" aria-label="Profit and loss for the selected range">
-      {widgets.map((w) => (
-        <WidgetCard key={w.key} widget={w} priorLabel={priorLabel} />
-      ))}
+      {/* THE TILES GET A BOX OF THEIR OWN, and the two lines below stay outside
+          it. They used to be cells of this same grid spanning every column,
+          which is exactly what stopped auto-fit collapsing the columns it did
+          not need: a track collapses only when nothing is placed into or across
+          it, and an item spanning 1 / -1 is across all of them. The row is
+          1136px wide at any window size — Finance is inside .content-narrow — so
+          it declared six tracks, the four tiles took the first four, and the
+          last two rendered as 378px of bare grey beside Net profit. */}
+      <div className="fin-widgets-row">
+        {widgets.map((w) => (
+          <WidgetCard key={w.key} widget={w} priorLabel={priorLabel} />
+        ))}
+      </div>
 
       {/* ONE LINE, and it prints the sentence it was given and nothing else.
           SECOND TO LAST ON PURPOSE. The drift line below is the harder failure —

@@ -15247,13 +15247,51 @@ button.sor-team:focus-visible {
 }
 
 /* ---------- The range widgets ---------- */
+/* TWO ELEMENTS, AND THE NESTING IS LOAD-BEARING.
+
+   .fin-widgets is the bordered card. .fin-widgets-row inside it is the grid of
+   tiles. The two full-width lines under the tiles — the standing sentence and
+   the drift alert — are SIBLINGS of that grid, never cells in it.
+
+   They used to be cells, spanning "grid-column: 1 / -1", and that quietly broke
+   the row. Grid L1 7.2.3.2 is explicit: auto-fit collapses a repeated track only
+   when it has no in-flow item placed into OR SPANNING ACROSS it — and an item
+   spanning every column spans across all of them. So nothing ever collapsed. It
+   went unnoticed while the only such item was the drift line, which renders
+   solely when the checksum fails. The standing sentence renders ALWAYS, so from
+   the day it shipped the row was wrong on every screen.
+
+   Measured in the app, not reasoned about. .content-narrow caps this column at
+   1180px, which leaves the row 1136px however wide the window is, and 1136px
+   fits SIX 172px tracks. The four tiles took tracks 1-4 — 757px — and the last
+   two stayed open as 378px of bare --border ground beside Net profit. That is
+   the grey block. With the lines out of the grid the same 1136px reads
+   283.25px x 4 then 0px x 2: the two spare tracks collapse, their gutters go
+   with them, and the tiles have the row.
+
+   Keeping the lines outside also means nothing here has to know how many tiles
+   there are, which is the property the auto-fit was chosen for in the first
+   place. */
+.fin-widgets {
+  display: flex;
+  flex-direction: column;
+  /* One gap rule draws every hairline in this card — between the tiles, and
+     between the tile row and the lines under it — so they cannot drift to
+     different weights. */
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-width: 0;
+}
 /* auto-fit rather than a fixed count: at 1400px they sit in a row, at 900px they
    wrap, and at phone width they stack — without a breakpoint that has to be kept
    in step with the number of widgets, which is exactly what earned its keep when
    the shipping tile left and the row went from five to four. The minimum is 172px
    because "$160,250.90" at 22px is 148px of glyphs and a figure that meets its
    own cell edge looks truncated whether or not it is. */
-.fin-widgets {
+.fin-widgets-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
   /* Four named bands — label, figure, note, delta — shared by every widget via
@@ -15262,10 +15300,15 @@ button.sor-team:focus-visible {
      of KPIs whose numbers do not line up looks broken however correct it is. */
   grid-template-rows: auto auto auto auto;
   gap: 1px;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
+  /* A WHITE GROUND, not --border, and this is the second half of the same fix.
+     Four tiles over three columns leaves one cell empty on the wrapped row, and
+     an empty cell shows whatever the grid is standing on. Over --border that is
+     a grey slab beside Net profit — the same thing the collapsed tracks were
+     doing across the full width, just in a narrower window. Over --surface it is
+     ordinary empty space, and it stays right for any number of tiles at any
+     width, which a breakpoint counting tiles would not. The hairlines are drawn
+     by the tiles instead; see .fin-widget. */
+  background: var(--surface);
   min-width: 0;
 }
 .fin-widget {
@@ -15275,6 +15318,16 @@ button.sor-team:focus-visible {
   row-gap: 3px;
   padding: 13px 14px 12px;
   background: var(--surface);
+  /* EACH TILE DRAWS ITS OWN HAIRLINE, a 1px ring that paints into the 1px gap
+     around it. Two neighbours' rings meet inside the same gap, so what shows is
+     one line and not two — verified at 1x, 1.25x, 1.5x and 2x, because a rule
+     that relies on two shadows landing on the same pixel is exactly the rule
+     that doubles on a fractional display. At the row's outer edge the ring falls
+     outside the card's padding box and its overflow: hidden clips it, so the
+     card's own border is not doubled either.
+     The row used to draw these lines by standing on a --border ground and
+     letting the gaps show it. That also painted every cell no tile had reached. */
+  box-shadow: 0 0 0 1px var(--border);
   min-width: 0;
 }
 /* The bottom line gets a ground of its own. It is the answer; the four before
@@ -15355,11 +15408,11 @@ button.sor-team:focus-visible {
 .fin-widget-delta.is-flat {
   opacity: 0.75;
 }
-/* The checksum failure. It spans the whole grid because it invalidates every
-   cell in it, not one. */
+/* The checksum failure. Full width under the tiles because it invalidates every
+   one of them, not one — as a SIBLING of .fin-widgets-row, not as a cell
+   spanning it. Spanning the grid is what stopped auto-fit collapsing the tracks
+   it does not need; see the note on .fin-widgets. */
 .fin-widgets-drift {
-  grid-column: 1 / -1;
-  grid-row: auto;
   display: flex;
   align-items: flex-start;
   gap: 7px;
@@ -17687,7 +17740,7 @@ button.sor-team:focus-visible {
   /* Widgets at two-and-a-bit a row rather than five, and the share column
      comes off the statement before the amount column does — the amount is the
      point, the share is the gloss. */
-  .fin-widgets {
+  .fin-widgets-row {
     grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   }
   .fin-widget-figure {
@@ -17737,7 +17790,7 @@ button.sor-team:focus-visible {
   /* One widget a row at phone width. Two columns of 148px need 296px plus the
      gutters, which a 640px viewport has and a 380px one does not — and a figure
      shrunk to fit half of 380px is not a figure anyone reads. */
-  .fin-widgets {
+  .fin-widgets-row {
     grid-template-columns: minmax(0, 1fr);
   }
   /* The range readout drops below its buttons rather than squeezing them. */
@@ -29908,17 +29961,17 @@ button.sor-team:focus-visible {
   vertical-align: 1px;
   cursor: help;
 }
-/* Spans the whole grid like the drift line does, because it is about the row
-   rather than about one cell, and it sits immediately ABOVE that line so a
-   screen carrying both reads the quiet one first and the hard one last.
+/* Full width like the drift line, because it is about the row rather than about
+   one cell, and it sits immediately ABOVE that line so a screen carrying both
+   reads the quiet one first and the hard one last. It gets that width by being
+   a SIBLING of .fin-widgets-row inside the flex card — not by spanning the
+   grid, which is what kept eight tracks alive for four tiles.
    No border of its own: .fin-widgets has a 1px gap over a --border ground, so
    the separating rule is already drawn and a second one doubles it.
    --text-2, not --text-3: this is a sentence somebody has to read, not a label
    they glance at. The same weight whatever the state — see the note in
    Widgets.tsx about a line that only shouts on the bad days. */
 .fin-widgets-standing {
-  grid-column: 1 / -1;
-  grid-row: auto;
   margin: 0;
   padding: 9px 14px;
   background: var(--surface-2);
