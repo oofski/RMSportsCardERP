@@ -140,33 +140,19 @@ export function InvoicingModule({
     [reload, toast]
   )
 
-  /**
-   * Record a payment. Deliberately NOT `move` with a 'paid' argument — the card
-   * does not go anywhere, because an order that arrived before it was paid for
-   * has not gone backwards up the board.
-   */
-  /**
-   * BOTH WAYS, because the button that only went one way was a trap.
+  /*
+   * PAYING IS A DIALOG NOW, and it lives on the board.
    *
-   * `setPurchaseOrderPaid` has always taken a boolean and has always logged
-   * "Payment un-marked" for the false case — it was reachable from nothing. A
-   * payment ticked on the wrong card had no way back at all, and the only thing
-   * that cleared `paid_at` was cancelling the order and reopening it, which
-   * reverses stock and voids the purchase's cost to fix a mis-click on a
-   * different question entirely.
+   * There was a `markPaid` callback here: one toggle, `setPaid(id, !paidAt)`,
+   * which could say the whole total went or that none of it had and nothing in
+   * between. The owner: "sometimes we pay part of a PO." A toggle cannot record
+   * that, so the board opens PayPoModal instead and does its own writing and its
+   * own toasts, and all this page owes it is `onReload`.
+   *
+   * `api.purchaseOrders.setPaid` is untouched and still used — the receipt view
+   * calls it, and it now writes a payment for whatever is outstanding rather
+   * than stamping `paid_at` behind the payments' back.
    */
-  const markPaid = useCallback(
-    async (id: string, poNumber: string, paid: boolean) => {
-      const res = await api.purchaseOrders.setPaid(id, paid)
-      if (!res.ok) {
-        toast.error(res.error ?? (paid ? 'Could not record the payment.' : 'Could not undo that.'))
-        return
-      }
-      toast.success(paid ? `${poNumber} is marked paid.` : `${poNumber} is no longer marked paid.`)
-      await reload()
-    },
-    [reload, toast]
-  )
 
   /**
    * THE WAY BACK TO THE BUYER-ASSIGNMENT SCREEN.
@@ -411,7 +397,7 @@ export function InvoicingModule({
             supplyOrders={supplyOrders}
             canManageSupplies={canManageSupplies}
             onDeletePo={canManage ? removePo : undefined}
-            onMarkPaid={markPaid}
+            onReload={canManage ? reload : undefined}
             onBillBuyers={billBuyers}
             thumbnails={thumbnails}
             onMove={move}

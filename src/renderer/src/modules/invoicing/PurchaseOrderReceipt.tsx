@@ -14,6 +14,7 @@ import {
   orderGlows
 } from '@shared/purchaseOrders'
 import { receiveProgress, receivableProgressOf } from '@shared/receiving'
+import { poBalance } from '@shared/orderActions'
 import { purchaseQtyFloor, stepDownBlockedReason, stepQty } from '@shared/lineQty'
 import {
   isOpenTab,
@@ -260,6 +261,14 @@ export function PurchaseOrderReceipt({
   }
 
   const meta = PO_STAGE_META[detail.status]
+  /**
+   * What is still owed, from the payments the detail already carries.
+   *
+   * The board's dialog is where a part-payment is TYPED; this only needs to say
+   * that one happened, so the Mark paid button here does not read "Mark paid" on
+   * an order half of which is already wired. Same arithmetic, one contract.
+   */
+  const receiptBalance = poBalance(detail.total, detail.payments ?? [])
   const moves = PO_TRANSITIONS[detail.status] ?? []
   const number = displayOrderNumber(detail.poNumber, detail.orderKind)
   const destinations = orderDestinations(detail)
@@ -494,11 +503,19 @@ export function PurchaseOrderReceipt({
                   type="button"
                   className="btn po-markpaid"
                   disabled={payBusy}
-                  title={`Record that ${detail.poNumber} has been paid. It stays in ${meta.label} — this is the payment, not a stage.`}
+                  title={
+                    receiptBalance.partly
+                      ? `${formatMoney(receiptBalance.paid)} of ${formatMoney(receiptBalance.total)} has been sent. This pays the rest. To record another part-payment instead, use Pay on the board.`
+                      : `Record that ${detail.poNumber} has been paid. It stays in ${meta.label} — this is the payment, not a stage.`
+                  }
                   onClick={() => void markPaid()}
                 >
                   <Icon name="DollarSign" size={13} />
-                  Mark paid
+                  {/* SAYS WHAT IS LEFT once part of it has gone. "Mark paid" on
+                      an order half wired reads as though nothing was sent, and
+                      this is the one place that can say otherwise without
+                      opening the board's dialog. */}
+                  {receiptBalance.partly ? `Pay the rest — ${formatMoney(receiptBalance.outstanding)}` : 'Mark paid'}
                 </button>
               ))}
           </div>

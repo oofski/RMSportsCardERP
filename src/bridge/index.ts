@@ -771,6 +771,19 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       removeAdjustment: (adjustmentId: string): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poRemoveAdjustment, { adjustmentId }),
       /**
+       * Money actually sent against the order. POSITIVE, always — a credit from
+       * the supplier changes what the order COST and belongs in an adjustment.
+       *
+       * `paid_at` follows from these: it is stamped once they cover the total
+       * and cleared if a removal drops them below it, so every screen that
+       * already reads it goes on meaning "settled" without being taught about
+       * part-payments.
+       */
+      addPayment: (id: string, amount: number, note: string | null): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poAddPayment, { id, amount, note }),
+      removePayment: (paymentId: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poRemovePayment, { paymentId }),
+      /**
        * Which open roadshow orders still have this product on a given shelf.
        *
        * Drawn on a sales order line so the operator can sell THAT order's cases.

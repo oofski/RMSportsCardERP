@@ -4685,6 +4685,166 @@ button.po-card-num-link:focus-visible {
   color: var(--brand-700);
 }
 
+/* ---------- Paying a purchase order, in full or in part ---------- */
+/* The owner: "sometimes we pay part of a PO." The dialog leads with the three
+   figures the decision turns on — what it came to, what has gone, what is left —
+   because every control under them is only meaningful against that last one. */
+.po-pay-sums {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 4px 14px;
+  margin-bottom: 16px;
+}
+.po-pay-sums p {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.po-pay-sums p + p {
+  border-top: 1px solid var(--border);
+}
+.po-pay-sums b {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+/* The one that is not a fact about the past. It is the figure "pay in full"
+   sends and the figure the typed box is checked against, so it carries the
+   weight rather than sitting third in a list of three equals. */
+.po-pay-sums p.is-total {
+  font-weight: 600;
+  color: var(--text-1);
+}
+.po-pay-sums p.is-total b {
+  font-size: 16px;
+}
+
+.po-pay-actions {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0;
+}
+.po-pay-actions .btn {
+  flex: 1;
+}
+
+/* What the typed amount would leave behind, printed as they type. The whole
+   reason the box exists is the figure it leaves, so it is shown before the
+   button rather than discovered after pressing it. */
+.po-pay-lead {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.po-pay-lead b {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Local rather than the finance module's Note: this is the only callout on the
+   buy side, and importing a component across modules to draw two boxes buys a
+   dependency in both directions for no shared behaviour. */
+.po-pay-note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.po-pay-note p {
+  margin: 4px 0 0;
+}
+.po-pay-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+.po-pay-note.is-good {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success-strong);
+}
+.po-pay-note.is-bad {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger-strong);
+}
+
+/* What has already been sent, and the way to take one back. This is the undo
+   that used to be a whole-order toggle: on an order settled by three wires it
+   can remove the one that was entered twice, which the toggle could not. */
+.po-pay-list {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.po-pay-list h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.po-pay-list p {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding: 7px 0;
+  font-size: 13px;
+}
+.po-pay-list p + p {
+  border-top: 1px solid var(--border);
+}
+.po-pay-list b {
+  font-variant-numeric: tabular-nums;
+  min-width: 84px;
+}
+/* The date and note take the slack so Remove stays hard against the right edge,
+   in the same place on every row — a destructive control that moves with the
+   length of a note is one that gets pressed on the wrong row. */
+.po-pay-list p > span {
+  flex: 1;
+  color: var(--text-3);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.po-pay-drop {
+  flex: none;
+  border: 0;
+  background: transparent;
+  padding: 3px 6px;
+  margin-right: -6px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--danger);
+  cursor: pointer;
+}
+.po-pay-drop:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+.po-pay-drop:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.po-pay-drop:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
 /* ---------- Create modal: line items ---------- */
 .po-lines-empty {
   margin-top: 14px;

@@ -46,7 +46,9 @@ import {
   scanInPurchaseOrder,
   setPartyPinned,
   addPoAdjustment,
+  addPoPayment,
   removePoAdjustment,
+  removePoPayment,
   setPurchaseOrderFreight,
   setPurchaseOrderRouting,
   addPurchaseOrderLines,
@@ -611,6 +613,49 @@ export function registerPurchaseOrdersIpc(): void {
         const id = String(payload?.adjustmentId ?? '')
         if (!id) return { ok: false, error: 'No adjustment specified.' }
         const res = removePoAdjustment(id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.order as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * MONEY ACTUALLY SENT. `requireInvoicing` like the adjustment above, and for
+   * the same reason: it moves what the order owes, and it can settle it.
+   */
+  ipcMain.handle(
+    IPC.poAddPayment,
+    (_e, payload: { id?: unknown; amount?: unknown; note?: unknown }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const id = String(payload?.id ?? '')
+        if (!id) return { ok: false, error: 'No purchase order specified.' }
+        // Number() rather than a cast, so a form string that will not parse
+        // arrives as NaN and is refused by name — never as a payment of zero,
+        // which would read as a settled order that nothing was sent on.
+        const amount = Number(payload?.amount)
+        if (!Number.isFinite(amount)) return { ok: false, error: 'Enter how much was paid.' }
+        const res = addPoPayment(id, amount, payload?.note == null ? null : String(payload.note), actor.id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.order as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.poRemovePayment,
+    (_e, payload: { paymentId?: unknown }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const id = String(payload?.paymentId ?? '')
+        if (!id) return { ok: false, error: 'No payment specified.' }
+        const res = removePoPayment(id, actor.id)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.order as PurchaseOrderDetail }

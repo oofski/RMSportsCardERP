@@ -1127,6 +1127,15 @@ export interface PurchaseOrder {
   updatedAt: string
   orderedAt: string | null
   paidAt: string | null
+  /**
+   * WHAT HAS ACTUALLY BEEN SENT so far, summed from the order's payments.
+   *
+   * On the SUMMARY as well as the detail, because the board has to be able to
+   * say "part paid" without opening every card. `paidAt` alone could only ever
+   * say settled or not, and an order half wired looked exactly like one nothing
+   * had been sent on.
+   */
+  amountPaid: number
   receivedAt: string | null
   cancelledAt: string | null
   /** When the PO's cases were scanned into stock (idempotency guard). */
@@ -1157,6 +1166,36 @@ export interface PurchaseOrderDetail extends PurchaseOrder {
   lines: PurchaseOrderLine[]
   /** Money on this order that bought no goods. See PurchaseOrderAdjustment. */
   adjustments: PurchaseOrderAdjustment[]
+  /** What has actually been sent, one row per payment. See PurchaseOrderPayment. */
+  payments: PurchaseOrderPayment[]
+}
+
+/**
+ * MONEY ACTUALLY SENT AGAINST A PURCHASE ORDER.
+ *
+ * The owner: "sometimes we pay part of a PO."
+ *
+ * `paid_at` was the whole story — one stamp meaning the money has gone — so an
+ * order half wired read exactly like one nothing had been sent on. These are the
+ * payments themselves.
+ *
+ * A ROW EACH, not a running total on the order. Two part-payments are two facts,
+ * each with its own date and its own reason, and a total would lose both the
+ * moment it was written. Append-only, so "when did we pay the rest of that" is
+ * answerable months later.
+ *
+ * POSITIVE, always. A credit from the supplier is not a negative payment — it
+ * changes what the order COST, which is what a `PurchaseOrderAdjustment` is for.
+ * Keeping the two apart is what lets the balance mean one thing.
+ */
+export interface PurchaseOrderPayment {
+  id: string
+  poId: string
+  /** What was sent. Always greater than zero. */
+  amount: number
+  /** Which wire, which card, which cheque. Optional. */
+  note: string | null
+  createdAt: string
 }
 
 /**

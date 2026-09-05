@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type {
   PurchaseOrder,
+  PurchaseOrderPayment,
   PurchaseOrderStatus,
   SupplyOrder,
   SupplyOrderStatus
@@ -20,6 +21,10 @@ import { Icon } from '../../components/Icon'
 import { ReceiveBar } from '../../components/ReceiveProgress'
 import { FreightLine, TrackingLine } from '../../components/FreightFields'
 import { formatDate, formatMoney } from '../../lib/format'
+import { api } from '../../lib/api'
+import { Button, Field, Input, Modal } from '../../components/ui'
+import { useToast } from '../../components/Toast'
+import { poBalance } from '@shared/orderActions'
 import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
 
 /**
@@ -86,7 +91,7 @@ export function PurchaseOrderBoard({
   onMove,
   onOpen,
   onDeletePo,
-  onMarkPaid,
+  onReload,
   onBillBuyers,
   onMoveSupply,
   onDeleteSupply
@@ -103,9 +108,17 @@ export function PurchaseOrderBoard({
   /** Undefined without the manage permission — the button is then not rendered
    *  at all rather than rendered and refused. */
   onDeletePo?: (id: string, poNumber: string) => void
-  /** Record a payment, or take one back, without moving the card. See `payable`
-   *  in PoCard — the false case is how a mis-ticked payment is undone. */
-  onMarkPaid?: (id: string, poNumber: string, paid: boolean) => void
+  /**
+   * Re-read the board after the payment dialog has changed something.
+   *
+   * This used to be `onMarkPaid(id, poNumber, paid)` — a toggle, because paid
+   * was a yes/no. It is a balance now, so the card has nothing to tell the page
+   * except that the money changed and the row it is drawing is stale.
+   *
+   * Undefined without the manage permission, which is what hides the Pay button
+   * rather than showing one that is refused.
+   */
+  onReload?: () => Promise<void> | void
   /**
    * Open the buyer-assignment screen for a dropship that has not been billed.
    *
@@ -118,6 +131,18 @@ export function PurchaseOrderBoard({
 }): JSX.Element {
   const [dragId, setDragId] = useState<string | null>(null)
   const [overStage, setOverStage] = useState<PoColumn | null>(null)
+  /**
+   * WHICH ORDER IS BEING PAID, if any.
+   *
+   * Held by the board rather than by the card so the dialog outlives the card
+   * that opened it: the card is re-keyed and re-drawn every time the list
+   * reloads, and a modal owned by it would blink out mid-payment. Stored as an
+   * ID, and the order looked up from `pos`, so what the dialog shows follows the
+   * reload rather than a copy taken when it opened — that is what lets it repaint
+   * "still owing" after a part-payment without being closed.
+   */
+  const [payingId, setPayingId] = useState<string | null>(null)
+  const paying = payingId ? pos.find((p) => p.id === payingId) ?? null : null
   const dragged = dragId ? pos.find((p) => p.id === dragId) ?? null : null
   // The real STATUS decides which moves are legal; the COLUMN decides where the
   // card is drawn. They come apart on an order that is received and paid — see
@@ -185,7 +210,7 @@ export function PurchaseOrderBoard({
                       onMove={onMove}
                       onOpen={onOpen}
                       onDelete={onDeletePo}
-                      onMarkPaid={onMarkPaid}
+                      onPay={onReload ? setPayingId : undefined}
                       onBillBuyers={onBillBuyers}
                       dragging={dragId === po.id}
                       onDragStart={setDragId}
@@ -210,6 +235,18 @@ export function PurchaseOrderBoard({
           </div>
         )
       })}
+      {paying && (
+        <PayPoModal
+          po={paying}
+          onClose={() => setPayingId(null)}
+          onPaid={async () => {
+            // A payment changes `paid_at`, the total paid, and therefore which
+            // column the card belongs in — none of which the dialog can repaint
+            // by itself, so the page re-reads.
+            await onReload?.()
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -219,7 +256,7 @@ function PoCard({
   onMove,
   onOpen,
   onDelete,
-  onMarkPaid,
+  onPay,
   onBillBuyers,
   dragging,
   onDragStart,
@@ -229,7 +266,8 @@ function PoCard({
   onMove: (id: string, to: PurchaseOrderStatus) => void
   onOpen: (id: string) => void
   onDelete?: (id: string, poNumber: string) => void
-  onMarkPaid?: (id: string, poNumber: string, paid: boolean) => void
+  /** Open the payment dialog on this order. Undefined without manage. */
+  onPay?: (id: string) => void
   onBillBuyers?: (id: string) => void
   dragging: boolean
   onDragStart: (id: string) => void
@@ -286,10 +324,26 @@ function PoCard({
    * on the wrong card had no way back from this board at all: the only thing
    * that cleared `paid_at` was cancelling the order and reopening it, which
    * reverses stock and voids the purchase's cost to undo a mis-click about
-   * money. The backend has taken a boolean and logged "Payment un-marked" all
-   * along — nothing reached it.
+   * money. That undo now lives inside the dialog, as Remove beside the payment
+   * itself — which is more precise than a toggle was, because on an order
+   * settled by three wires it can take back the one that was wrong.
+   *
+   * IT OPENS A DIALOG RATHER THAN TICKING A BOX. The owner: "sometimes we pay
+   * part of a PO." A single button could only ever assert the whole total went,
+   * so a half-wired order had to be recorded as either fully paid or not paid at
+   * all, and both are false.
    */
-  const payable = onMarkPaid !== undefined && po.status !== 'cancelled'
+  const payable = onPay !== undefined && po.status !== 'cancelled'
+  /**
+   * What the button says, which is the balance rather than a state.
+   *
+   * A card reading "Mark paid" on an order half of which is already wired is the
+   * screen telling somebody nothing was sent. Reading the outstanding figure off
+   * the summary's `amountPaid` costs nothing — the board already has it — and
+   * turns the button into the answer to the question somebody opened the column
+   * to ask.
+   */
+  const bal = poBalance(po.total, po.amountPaid > 0 ? [{ amount: po.amountPaid }] : [])
   /**
    * Has this dropship been sold on yet?
    *
@@ -590,15 +644,15 @@ function PoCard({
           {payable && (
             <button
               type="button"
-              className={`btn po-move ${po.paidAt ? 'po-move-unpaid' : 'po-move-paid'}`}
+              className={`btn po-move ${bal.settled ? 'po-move-unpaid' : 'po-move-paid'}`}
               title={
-                po.paidAt
-                  ? `${po.poNumber} was marked paid ${formatDate(po.paidAt)}. This takes that back — the order stays exactly where it is and no stock moves.`
-                  : `Record that ${po.poNumber} has been paid. It stays where it is — this is the payment, not a stage.`
+                bal.settled
+                  ? `${po.poNumber} was settled ${po.paidAt ? formatDate(po.paidAt) : ''}. Opens what was paid, so a payment entered by mistake can be taken back.`
+                  : `Pay ${po.poNumber} in full or record part of it. The order stays where it is — this is the payment, not a stage.`
               }
-              onClick={() => onMarkPaid?.(po.id, po.poNumber, !po.paidAt)}
+              onClick={() => onPay?.(po.id)}
             >
-              {po.paidAt ? 'Un-mark paid' : 'Mark paid'}
+              {bal.settled ? 'Paid' : bal.partly ? `Pay — ${formatMoney(bal.outstanding)} left` : 'Pay'}
             </button>
           )}
           {moves.map((to) => (
@@ -722,5 +776,253 @@ function SupplyCard({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * PAY A PURCHASE ORDER, IN FULL OR IN PART.
+ *
+ * The owner: "when I go to purchase order and I click pay, have a little pop up
+ * with two options — one is pay in full and the other just lets you type in an
+ * amount and then it kind of shows it, because sometimes we pay part of a PO."
+ *
+ * ## Why a dialog rather than a toggle
+ *
+ * The button used to stamp `paid_at` and be done: one press, one fact, no
+ * amount. An order half wired therefore read exactly like one nothing had been
+ * sent on — the worst possible reading, because it is the one that gets paid
+ * twice. There is a figure to capture now, so there has to be somewhere to type
+ * it, and the balance has to be visible while it is typed.
+ *
+ * ## What is on it
+ *
+ * Pay in full is a button and not a default in the box, because it is a
+ * different assertion from a typed amount: it means "whatever is left", and it
+ * stays right if the order's total moves between opening this and pressing it.
+ *
+ * Every payment already made is listed with the date, and each can be removed —
+ * a wire entered against the wrong order is the ordinary mistake here, and
+ * before this the only way back was un-marking the whole order.
+ *
+ * ## The refusal that matters
+ *
+ * More than is outstanding is refused, by the write and named here: paying
+ * $5,000 against a $4,900 order is not a payment, it is a $100 discrepancy, and
+ * this app has somewhere honest to put it. The message says so rather than
+ * quietly booking an order that reads over-paid for ever.
+ */
+function PayPoModal({
+  po,
+  onClose,
+  onPaid
+}: {
+  po: PurchaseOrder
+  onClose: () => void
+  onPaid: () => Promise<void> | void
+}): JSX.Element {
+  const toast = useToast()
+  const [busy, setBusy] = useState(false)
+  const [amount, setAmount] = useState('')
+  const [note, setNote] = useState('')
+  const [payments, setPayments] = useState<PurchaseOrderPayment[] | null>(null)
+
+  // The detail read, for the payments already made. The summary carries the
+  // total paid but not the rows behind it, and "which of these three was the
+  // duplicate" is the question somebody opens this to answer.
+  useEffect(() => {
+    let live = true
+    void api.purchaseOrders
+      .get(po.id)
+      .then((detail) => {
+        if (live) setPayments(detail?.payments ?? [])
+      })
+      .catch(() => {
+        if (live) setPayments([])
+      })
+    return () => {
+      live = false
+    }
+  }, [po.id])
+
+  // From the rows when they are in, from the summary until then — so the
+  // balance is right on the first paint rather than blank for a beat.
+  const balance = useMemo(
+    () =>
+      payments === null
+        ? poBalance(po.total, [{ amount: po.amountPaid }])
+        : poBalance(po.total, payments),
+    [po.total, po.amountPaid, payments]
+  )
+
+  const typed = Number((amount || '').replace(/[^0-9.]/g, ''))
+  const typedOk = amount.trim() !== '' && Number.isFinite(typed) && typed > 0
+  // Shown as they type, because the whole point of the box is the figure it
+  // leaves behind. Floored at zero: the write refuses an overpayment, and a
+  // negative "left" would be a preview of something that cannot happen.
+  const leaves = typedOk ? Math.max(0, Math.round((balance.outstanding - typed) * 100) / 100) : null
+  const over = typedOk && Math.round(typed * 100) > Math.round(balance.outstanding * 100) + 1
+
+  const pay = async (value: number, why: string): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.addPayment(po.id, value, note.trim() || null)
+      if (!res.ok) {
+        toast.error(res.error ?? 'That payment could not be recorded.')
+        return
+      }
+      toast.success(`${formatMoney(value)} recorded against ${po.poNumber}${why}`)
+      await onPaid()
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'That payment could not be recorded.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const drop = async (payment: PurchaseOrderPayment): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.removePayment(payment.id)
+      if (!res.ok) {
+        toast.error(res.error ?? 'That payment could not be removed.')
+        return
+      }
+      setPayments(res.data?.payments ?? [])
+      await onPaid()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'That payment could not be removed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={`Pay ${po.poNumber}`}
+      subtitle={po.supplier ?? undefined}
+      onClose={() => (busy ? undefined : onClose())}
+      footer={
+        <Button variant="ghost" onClick={onClose} disabled={busy}>
+          Close
+        </Button>
+      }
+    >
+      <div className="po-pay-sums">
+        <p>
+          <span>The order comes to</span>
+          <b>{formatMoney(balance.total)}</b>
+        </p>
+        <p>
+          <span>Paid so far</span>
+          <b>{formatMoney(balance.paid)}</b>
+        </p>
+        <p className="is-total">
+          <span>Still owing</span>
+          <b>{formatMoney(balance.outstanding)}</b>
+        </p>
+      </div>
+
+      {balance.settled ? (
+        <div className="po-pay-note is-good">
+          <Icon name="Check" size={15} />
+          <div>
+            <b>{po.poNumber} is settled.</b>
+            <p>
+              {formatMoney(balance.paid)} has been sent against a {formatMoney(balance.total)}{' '}
+              order. Remove a payment below if one was entered by mistake.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="po-pay-actions">
+            <Button
+              variant="primary"
+              icon="Check"
+              loading={busy}
+              onClick={() => void pay(balance.outstanding, ' — settled.')}
+            >
+              Pay in full — {formatMoney(balance.outstanding)}
+            </Button>
+          </div>
+          <Field
+            label="Or pay part of it"
+            hint="What was actually sent. The rest stays owing on the order."
+          >
+            <Input
+              inputMode="decimal"
+              value={amount}
+              placeholder={String(balance.outstanding)}
+              invalid={over}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </Field>
+          <Field label="Note" hint="Which wire, which card, which cheque — optional.">
+            <Input
+              maxLength={200}
+              value={note}
+              placeholder="Wire 12 Aug…"
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </Field>
+          {over ? (
+            <div className="po-pay-note is-bad" role="alert">
+              <Icon name="AlertTriangle" size={15} />
+              <div>
+                <p>
+                  Only {formatMoney(balance.outstanding)} is outstanding. If more than that was
+                  actually sent, add a <b>payment adjustment</b> on the order for the difference —
+                  that raises what the order cost, and then the wire and the order agree.
+                </p>
+              </div>
+            </div>
+          ) : (
+            leaves !== null && (
+              <p className="po-pay-lead">
+                Records <b>{formatMoney(typed)}</b> against {po.poNumber} and leaves{' '}
+                <b>{formatMoney(leaves)}</b> owing
+                {leaves === 0 ? ' — which settles it.' : '.'}
+              </p>
+            )
+          )}
+          <div className="po-pay-actions">
+            <Button
+              variant="secondary"
+              icon="Plus"
+              loading={busy}
+              disabled={!typedOk || over}
+              onClick={() => void pay(typed, leaves === 0 ? ' — settled.' : '.')}
+            >
+              Record this payment
+            </Button>
+          </div>
+        </>
+      )}
+
+      {payments !== null && payments.length > 0 && (
+        <div className="po-pay-list">
+          <h4>What has been paid</h4>
+          {payments.map((p) => (
+            <p key={p.id}>
+              <b>{formatMoney(p.amount)}</b>
+              <span>
+                {formatDate(p.createdAt)}
+                {p.note ? ` · ${p.note}` : ''}
+              </span>
+              <button
+                type="button"
+                className="po-pay-drop"
+                disabled={busy}
+                title={`Take this ${formatMoney(p.amount)} back off ${po.poNumber} — for one entered twice, or against the wrong order.`}
+                onClick={() => void drop(p)}
+              >
+                Remove
+              </button>
+            </p>
+          ))}
+        </div>
+      )}
+    </Modal>
   )
 }

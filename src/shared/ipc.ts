@@ -419,6 +419,8 @@ export const IPC = {
   poSetFreight: 'po:set-freight',
   poAddAdjustment: 'po:adjustment:add',
   poRemoveAdjustment: 'po:adjustment:remove',
+  poAddPayment: 'po:payment:add',
+  poRemovePayment: 'po:payment:remove',
   // WHICH OPEN ROADSHOW ORDER STILL HAS THIS PRODUCT ON THE SHELF, so a sales
   // order line can sell that order's cases rather than whatever is oldest.
   // See @shared/poStock.

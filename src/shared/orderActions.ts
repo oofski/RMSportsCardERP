@@ -409,3 +409,53 @@ export function paidAction(facts: PaidActionFacts): PaidAction {
     upFront
   }
 }
+
+/* ===========================================================================
+   WHAT A PURCHASE ORDER STILL OWES
+
+   The owner: "sometimes we pay part of a PO." One rule, in the contract, so the
+   dialog that offers "pay in full", the sentence that says what is left and the
+   write that refuses an overpayment are all reading the same arithmetic.
+   =========================================================================== */
+
+export interface PoBalance {
+  /** What the order came to, lines plus freight plus adjustments. */
+  total: number
+  /** What has been sent so far. */
+  paid: number
+  /** total − paid, floored at zero. What "pay in full" would send. */
+  outstanding: number
+  /** True once the payments cover the total. Matches what stamps `paid_at`. */
+  settled: boolean
+  /** True when something has been paid and it is not yet all of it. */
+  partly: boolean
+}
+
+/**
+ * A CENT OF SLACK, and it is not a detail.
+ *
+ * The total is restated from lines, freight and adjustments that each round to
+ * the cent, so an order can end a cent away from the sum of the payments that
+ * were meant to settle it. Without the slack that order would sit unpaid for
+ * ever, and the only way to close it would be a payment of one cent that no
+ * bank statement will ever show.
+ */
+export function poBalance(total: number, payments: readonly { amount: number }[]): PoBalance {
+  const cents = (v: number): number => Math.round((Number(v) || 0) * 100)
+  const totalCents = cents(total)
+  const paidCents = payments.reduce((sum, p) => sum + cents(p.amount), 0)
+  const settled = paidCents >= totalCents - 1
+  return {
+    total: totalCents / 100,
+    paid: paidCents / 100,
+    // ZERO THE MOMENT IT IS SETTLED, not merely floored at zero.
+    //
+    // The slack means an order can be settled while a cent short, and reporting
+    // that cent would put "Pay in full — $0.01" on an order every other part of
+    // the app has agreed is paid. The two figures answer the same question, so
+    // they are derived from the same test rather than computed side by side.
+    outstanding: settled ? 0 : Math.max(0, totalCents - paidCents) / 100,
+    settled,
+    partly: paidCents > 0 && !settled
+  }
+}

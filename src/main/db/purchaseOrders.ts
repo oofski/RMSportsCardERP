@@ -7,6 +7,7 @@ import type {
   PurchaseOrder,
   PurchaseOrderAllocation,
   PurchaseOrderAdjustment,
+  PurchaseOrderPayment,
   PurchaseOrderDetail,
   PurchaseOrderLine,
   PurchaseOrderStatus,
@@ -61,6 +62,7 @@ interface PoRow {
   updated_at: string
   ordered_at: string | null
   paid_at: string | null
+  amount_paid?: number
   received_at: string | null
   cancelled_at: string | null
   scanned_at: string | null
@@ -315,6 +317,7 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     updatedAt: row.updated_at,
     orderedAt: row.ordered_at,
     paidAt: row.paid_at,
+    amountPaid: Number(row.amount_paid) || 0,
     receivedAt: row.received_at,
     cancelledAt: row.cancelled_at,
     scannedAt: row.scanned_at,
@@ -440,6 +443,11 @@ const RECEIVED_LINE_COUNT_SQL = `
 const PO_SELECT = `
   SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location,
          po.linked_invoice_id, po.total, po.shipping_cost,
+         -- What has actually been sent. A subquery rather than a join, so an
+         -- order with three payments is still one row: a join would multiply
+         -- every other aggregate on this SELECT by the payment count.
+         COALESCE((SELECT SUM(amount) FROM purchase_order_payments pp
+                    WHERE pp.po_id = po.id), 0) AS amount_paid,
          po.created_by, po.created_at, po.updated_at,
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
          po.tab_opened_at, po.tab_closed_at,
@@ -648,7 +656,8 @@ export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
     ...toSummary(header),
     ...dealTicketRefFor(db, 'po', id),
     lines,
-    adjustments: listPoAdjustments(db, id)
+    adjustments: listPoAdjustments(db, id),
+    payments: listPoPayments(db, id)
   }
 }
 
@@ -668,6 +677,210 @@ export interface PoAdjustmentResult {
  * The total is restated inside the same transaction, which is what carries the
  * change into the COGS row as well. See restateOrderTotal.
  */
+/** "$4,900.00" for a refusal somebody reads. Local because these sentences are
+ *  the only place in this file that prints money. */
+const money = (v: number): string =>
+  `$${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+/** Every payment against one order, oldest first — the order they were sent in. */
+export function listPoPayments(db: Database.Database, poId: string): PurchaseOrderPayment[] {
+  const rows = db
+    .prepare(
+      `SELECT id, po_id, amount, note, created_at
+         FROM purchase_order_payments
+        WHERE po_id = ?
+        ORDER BY created_at ASC, id ASC`
+    )
+    .all(poId) as Array<{
+    id: string
+    po_id: string
+    amount: number
+    note: string | null
+    created_at: string
+  }>
+  return rows.map((r) => ({
+    id: r.id,
+    poId: r.po_id,
+    amount: Number(r.amount) || 0,
+    note: r.note,
+    createdAt: r.created_at
+  }))
+}
+
+export interface PoPaymentResult {
+  order: PurchaseOrderDetail | null
+  error?: string
+}
+
+/**
+ * `paid_at` FROM THE PAYMENTS, in one place.
+ *
+ * The stamp keeps meaning exactly what it always meant — the moment this order
+ * was fully covered — and every screen that reads it goes on being right without
+ * being taught about part-payments. What changes is that it is now DERIVED:
+ * settled when the payments reach the total, cleared when a removal drops them
+ * back below it.
+ *
+ * A CENT OF SLACK, because a total is restated from lines and adjustments that
+ * each round, and an order left "unpaid" over a rounding cent would be an order
+ * nobody could ever close.
+ *
+ * The existing stamp is left alone when it is already right, so the date on a
+ * settled order does not move every time another row is touched.
+ */
+function restatePaidStamp(db: Database.Database, poId: string, ts: string): void {
+  const head = db.prepare('SELECT total, paid_at FROM purchase_orders WHERE id = ?').get(poId) as
+    | { total: number; paid_at: string | null }
+    | undefined
+  if (!head) return
+  const row = db
+    .prepare('SELECT COALESCE(SUM(amount), 0) AS paid FROM purchase_order_payments WHERE po_id = ?')
+    .get(poId) as { paid: number } | undefined
+  const paidCents = Math.round((Number(row?.paid) || 0) * 100)
+  const totalCents = Math.round((Number(head.total) || 0) * 100)
+  const settled = paidCents >= totalCents - 1
+  if (settled && head.paid_at) return
+  if (!settled && !head.paid_at) return
+  db.prepare('UPDATE purchase_orders SET paid_at = ?, updated_at = ? WHERE id = ?').run(
+    settled ? ts : null,
+    ts,
+    poId
+  )
+}
+
+/**
+ * Cover whatever is still owed on this order, in one row.
+ *
+ * THE REASON THIS IS A FUNCTION AND NOT THREE COPIES: `paid_at` is written from
+ * three places — the Pay dialog, the "mark paid" toggle, and a stage move onto
+ * the Paid column — and once payments existed, any of them stamping the date
+ * without writing a row would produce an order the board calls paid and the
+ * dialog says owes its whole total. That disagreement is invisible until
+ * somebody opens the dialog on a real order and is invited to pay it twice.
+ *
+ * So every one of them ends here, and the stamp is derived afterwards.
+ *
+ * Writes NOTHING when the remainder is zero or negative — an order that came to
+ * nothing is settled by owing nothing, and a $0 row would assert money moved and
+ * name none. Callers must run restatePaidStamp after this; that is what makes
+ * the empty case still stamp the date.
+ */
+function coverPoBalance(
+  db: Database.Database,
+  poId: string,
+  total: number,
+  note: string,
+  actorId: string | null,
+  ts: string
+): number {
+  const sofar = db
+    .prepare('SELECT COALESCE(SUM(amount), 0) AS paid FROM purchase_order_payments WHERE po_id = ?')
+    .get(poId) as { paid: number } | undefined
+  const owed =
+    (Math.round((Number(total) || 0) * 100) - Math.round((Number(sofar?.paid) || 0) * 100)) / 100
+  if (owed <= 0) return 0
+  db.prepare(
+    `INSERT INTO purchase_order_payments (id, po_id, amount, note, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(newId(), poId, owed, note, actorId, ts)
+  return owed
+}
+
+/**
+ * Record money sent against an order.
+ *
+ * WHAT IT REFUSES, and each is a figure that would otherwise be believed:
+ *
+ * - Zero, or anything that is not a number. The commonest way to write one is a
+ *   half-typed amount, and a payment of nothing is a row that says money moved
+ *   and names none.
+ * - A negative. A credit from the supplier changes what the order COST, and
+ *   `addPoAdjustment` is where that goes — booking it here would net two
+ *   different facts into one figure and leave the balance meaning neither.
+ * - More than is outstanding. Paying $5,000 against a $4,900 order is not a
+ *   payment, it is a $100 discrepancy, and the app has somewhere honest to put
+ *   it: an adjustment raises what the order cost, and then the wire matches.
+ *   Silently accepting it would leave an order that reads over-paid forever with
+ *   nothing saying why.
+ * - A cancelled order, which has no bill left to pay — the same refusal
+ *   adjustments and the shipping editor make, for the same reason.
+ */
+export function addPoPayment(
+  poId: string,
+  amount: number,
+  note: string | null,
+  actorId: string | null
+): PoPaymentResult {
+  const db = getDb()
+  const value = Math.round((Number(amount) || 0) * 100) / 100
+  if (!Number.isFinite(value) || value <= 0) {
+    return { order: getPurchaseOrder(poId), error: 'Enter how much was paid.' }
+  }
+  const run = db.transaction((): PoPaymentResult => {
+    const head = db
+      .prepare('SELECT id, status, po_number, total FROM purchase_orders WHERE id = ?')
+      .get(poId) as { id: string; status: string; po_number: string; total: number } | undefined
+    if (!head) return { order: null, error: 'That order is gone.' }
+    if (head.status === 'cancelled') {
+      return {
+        order: getPurchaseOrder(poId),
+        error: `${head.po_number} was cancelled, so there is nothing left to pay.`
+      }
+    }
+    const sofar = db
+      .prepare('SELECT COALESCE(SUM(amount), 0) AS paid FROM purchase_order_payments WHERE po_id = ?')
+      .get(poId) as { paid: number } | undefined
+    const paidCents = Math.round((Number(sofar?.paid) || 0) * 100)
+    const totalCents = Math.round((Number(head.total) || 0) * 100)
+    const outstanding = (totalCents - paidCents) / 100
+    if (Math.round(value * 100) > totalCents - paidCents + 1) {
+      return {
+        order: getPurchaseOrder(poId),
+        error:
+          `${head.po_number} has ${money(outstanding)} outstanding and this is ${money(value)}. ` +
+          'If more was actually sent, add a payment adjustment for the difference — that raises what the order cost, and then the two agree.'
+      }
+    }
+    const ts = nowIso()
+    db.prepare(
+      `INSERT INTO purchase_order_payments (id, po_id, amount, note, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(newId(), poId, value, (note ?? '').trim() || null, actorId, ts)
+    restatePaidStamp(db, poId, ts)
+    // Logged as the payment event the board already reads, so a part-payment
+    // appears in the order's history beside every other thing that happened to
+    // it rather than only in a panel somebody has to open.
+    recordOrderEvent('po', poId, 'paid', {
+      detail: `Paid ${money(value)}${(note ?? '').trim() ? ` — ${(note ?? '').trim()}` : ''}`,
+      actorId,
+      db
+    })
+    return { order: getPurchaseOrder(poId) }
+  })
+  return run()
+}
+
+/** Take one back off — a payment entered against the wrong order, or twice. */
+export function removePoPayment(paymentId: string, actorId: string | null = null): PoPaymentResult {
+  const db = getDb()
+  const run = db.transaction((): PoPaymentResult => {
+    const row = db
+      .prepare('SELECT po_id, amount FROM purchase_order_payments WHERE id = ?')
+      .get(paymentId) as { po_id: string; amount: number } | undefined
+    if (!row) return { order: null, error: 'That payment is gone.' }
+    db.prepare('DELETE FROM purchase_order_payments WHERE id = ?').run(paymentId)
+    const ts = nowIso()
+    restatePaidStamp(db, row.po_id, ts)
+    recordOrderEvent('po', row.po_id, 'paid', {
+      detail: `Payment of ${money(Number(row.amount) || 0)} removed`,
+      actorId,
+      db
+    })
+    return { order: getPurchaseOrder(row.po_id) }
+  })
+  return run()
+}
+
 export function addPoAdjustment(
   poId: string,
   amount: number,
@@ -744,7 +957,8 @@ export function listActivePurchaseOrderBoxes(): PurchaseOrderDetail[] {
       // why its count is 12 when the order says 20 — but it carries
       // qtyReceivable 0 and contributes nothing to any total.
       lines: (lineStmt.all(h.id) as PoLineRow[]).map((l) => toLine(l, units.get(l.id) ?? [])),
-      adjustments: listPoAdjustments(db, h.id)
+      adjustments: listPoAdjustments(db, h.id),
+      payments: listPoPayments(db, h.id)
     }
   })
 }
@@ -2343,9 +2557,15 @@ export function setPurchaseOrderPaid(
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
     const row = db
-      .prepare('SELECT id, status, po_number, paid_at FROM purchase_orders WHERE id = ?')
+      .prepare('SELECT id, status, po_number, paid_at, total FROM purchase_orders WHERE id = ?')
       .get(id) as
-      | { id: string; status: PurchaseOrderStatus; po_number: string; paid_at: string | null }
+      | {
+          id: string
+          status: PurchaseOrderStatus
+          po_number: string
+          paid_at: string | null
+          total: number
+        }
       | undefined
     if (!row) return { po: null, error: 'Purchase order not found.' }
     // A cancelled order is the one terminal stage, and its money has already
@@ -2363,11 +2583,29 @@ export function setPurchaseOrderPaid(
     if (!paid && !row.paid_at) return { po: getPurchaseOrder(id) }
 
     const ts = nowIso()
-    db.prepare('UPDATE purchase_orders SET paid_at = ?, updated_at = ? WHERE id = ?').run(
-      paid ? ts : null,
-      ts,
-      id
-    )
+    // IT WRITES PAYMENTS NOW, NOT THE STAMP.
+    //
+    // `paid_at` used to be set here directly, and once part-payments existed
+    // that made two writers of one fact: this, which stamped it, and
+    // restatePaidStamp, which derives it from the rows. An order marked paid by
+    // this button would then have shown a full balance still outstanding in the
+    // payment dialog, because the dialog counts rows and there were none.
+    //
+    // So "mark paid" means SEND WHAT IS LEFT — which on an untouched order is
+    // the whole total, and on one already half wired is the other half, which is
+    // what somebody pressing it on that order means. The stamp then falls out of
+    // restatePaidStamp exactly as it does for a payment typed into the dialog.
+    if (paid) {
+      coverPoBalance(db, id, row.total, 'Marked paid in full', actorId, ts)
+    } else {
+      // UN-MARKING TAKES THE PAYMENTS WITH IT, because the only orders that
+      // reach here are settled ones — an order part paid has no stamp, so the
+      // idempotency check above has already returned. Saying it was never paid
+      // while leaving the wires that paid it on the record would leave the two
+      // halves of one fact disagreeing.
+      db.prepare('DELETE FROM purchase_order_payments WHERE po_id = ?').run(id)
+    }
+    restatePaidStamp(db, id, ts)
     recordOrderEvent('po', id, 'paid', {
       detail: paid ? 'Marked paid' : 'Payment un-marked',
       actorId,
@@ -2450,6 +2688,17 @@ export function setPurchaseOrderStatus(
           ? 'UPDATE purchase_orders SET status = ?, received_at = NULL, cancelled_at = NULL, updated_at = ? WHERE id = ?'
           : 'UPDATE purchase_orders SET status = ?, paid_at = NULL, received_at = NULL, cancelled_at = NULL, updated_at = ? WHERE id = ?'
       ).run(status, ts, id)
+      // THE PAYMENTS GO WHERE THE STAMP GOES, and only where it goes.
+      //
+      // The two branches above are exactly the distinction: undoing a receipt
+      // keeps `paid_at`, because boxes arriving by mistake says nothing about
+      // whether the invoice was settled — so the payments stay too. Reopening a
+      // CANCELLED order clears it, and rows left behind there would put the
+      // whole total back on the dialog's "paid so far" for an order the app has
+      // just declared unpaid.
+      if (!undoingReceipt) {
+        db.prepare('DELETE FROM purchase_order_payments WHERE po_id = ?').run(id)
+      }
       recordOrderEvent('po', id, 'stage', {
         fromStage: row.status,
         toStage: status,
@@ -2517,6 +2766,25 @@ export function setPurchaseOrderStatus(
       db.prepare(
         `UPDATE purchase_orders SET status = ?, ${tsCol} = ?, updated_at = ? WHERE id = ?`
       ).run(status, ts, ts, id)
+      /**
+       * DRAGGING A CARD INTO PAID IS A PAYMENT, and it has to leave one behind.
+       *
+       * This branch stamps `paid_at` off `tsCol`, which was the whole story
+       * while paid was a yes/no. It is a balance now: an order stamped here with
+       * no payment row would draw in the Paid column and simultaneously tell the
+       * pay dialog that its entire total is still outstanding — and the first
+       * thing the dialog would offer is paying it again.
+       *
+       * The stamp is left as this UPDATE wrote it rather than re-derived: it is
+       * already correct here, and restatePaidStamp leaves a settled order's date
+       * alone anyway. This only supplies the row that agrees with it.
+       */
+      if (status === 'paid') {
+        const owedOn = db.prepare('SELECT total FROM purchase_orders WHERE id = ?').get(id) as
+          | { total: number }
+          | undefined
+        coverPoBalance(db, id, owedOn?.total ?? 0, 'Moved to Paid', actorId, ts)
+      }
       // INSIDE the transaction, so the move and the record of it commit
       // together. A log that can lag the board is a log nobody can use to work
       // out what went wrong, which is the only reason anybody opens one.

@@ -4793,6 +4793,64 @@ function migrate(database: Database.Database): void {
   }
   setMeta(database, 'schema_version', '97')
 
+  // v98: money paid against a purchase order, one row per payment.
+  //
+  // The owner: "sometimes we pay part of a PO." Until now `paid_at` was the
+  // whole story -- a single stamp meaning the money has gone -- and there was no
+  // way to say that half of it had. An order half wired read as unpaid, which
+  // is the same as saying nothing was sent.
+  //
+  // A TABLE RATHER THAN A COLUMN, and for the reason the adjustments table above
+  // is one: two part-payments are two facts, each with its own date and its own
+  // reason, and a running total on the order would lose both the moment it was
+  // written. Append-only, so what was paid and when is answerable months later.
+  //
+  // `paid_at` STAYS, and stays the same fact it always was: the moment the order
+  // was fully covered. It is now DERIVED -- stamped when the payments reach the
+  // total and cleared if one is removed and they no longer do -- so every screen
+  // that already reads it goes on meaning "this is settled" without being taught
+  // anything.
+  //
+  // The amount is POSITIVE. A refund from a supplier is not a negative payment:
+  // it is a credit against the order, which is what a payment adjustment is for.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_order_payments (
+      id         TEXT PRIMARY KEY,
+      po_id      TEXT NOT NULL,
+      amount     REAL NOT NULL,
+      note       TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_payments_po
+      ON purchase_order_payments (po_id);
+  `)
+  // EVERY ORDER ALREADY MARKED PAID GETS THE ROW THAT SAYS SO.
+  //
+  // Without this, an order settled last March has a stamp and no payments, and
+  // the balance -- which is now read from the rows -- would say the whole total
+  // is still owing on an order everybody knows was wired months ago. Worse, the
+  // first thing the new dialog would offer is paying it a second time.
+  //
+  // The row is the order's own total, dated the stamp it already carries, so the
+  // two agree by construction. The id is derived from the order id rather than
+  // random: it makes the row unique without a lookup, marks plainly where it
+  // came from, and means running this twice cannot double anything.
+  //
+  // Guarded on the order having NO payments at all, which is a condition the new
+  // code can never produce -- removing the last payment clears the stamp in the
+  // same transaction -- so this only ever sees rows written before v98.
+  database.exec(`
+    INSERT INTO purchase_order_payments (id, po_id, amount, note, created_by, created_at)
+    SELECT 'legacy-' || o.id, o.id, o.total, 'Marked paid before payments were recorded', NULL, o.paid_at
+      FROM purchase_orders o
+     WHERE o.paid_at IS NOT NULL
+       AND o.total > 0
+       AND NOT EXISTS (SELECT 1 FROM purchase_order_payments p WHERE p.po_id = o.id);
+  `)
+  setMeta(database, 'schema_version', '98')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

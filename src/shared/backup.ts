@@ -49,7 +49,7 @@
  * `src/main/db/database.ts`. A test asserts the two agree, because a constant
  * that silently falls behind the thing it names is worse than no constant.
  */
-export const CURRENT_SCHEMA_VERSION = 97
+export const CURRENT_SCHEMA_VERSION = 98
 
 /** What the database holds right now, in the words an owner recognises. */
 export interface BackupCounts {

@@ -323,6 +323,7 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // purchase differently from the one beside it. Tier 1 puts it after the
   // purchase_orders header it points at.
   { table: 'purchase_order_adjustments', key: ['id'], tier: 1 },
+  { table: 'purchase_order_payments', key: ['id'], tier: 1 },
   { table: 'supply_transactions', key: ['id'], tier: 1 },
   { table: 'supply_orders', key: ['id'], tier: 1 },
   { table: 'finance_cogs', key: ['id'], tier: 1 },
