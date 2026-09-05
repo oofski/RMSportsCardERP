@@ -44,6 +44,7 @@
  * schedule" drift, and the day they do, this hands somebody a number, the save
  * rejects it, and nothing on screen explains why the app disagreed with itself.
  */
+import type { RatePeriodInput } from './financeStreaming'
 import { COMMISSION_RATE_MAX, COMMISSION_RATE_MIN, isDayKey } from './financeStreaming'
 
 /** What the platform's own statement says, typed off the document. */
@@ -596,6 +597,146 @@ export const MODELLED_FEE_LINES: (keyof StatementLines)[] = [
   'statedCommission',
   'statedProcessing'
 ]
+
+/* ===========================================================================
+   FROM A STATED MONTH TO THE TERMS THAT PRODUCED IT
+
+   THE WHOLE POINT, so it is worth being exact about what this does and does not
+   claim.
+
+   Of the six lines a month-end summary prints under Fees and costs, this app
+   MODELS two: commission and payment processing are reverse-engineered from the
+   net each sale row was paid, at rates somebody typed into a rate period. The
+   other four are already ledger rows. So when a month's revenue reads high, the
+   only two dials that could be wrong are those rates — and a stated commission
+   total is one equation with one unknown in it.
+
+   ## Why solving a rate IS the owner's per-night distribution
+
+   The owner asked for the gap between projected and actual to be split across
+   nights "based on the percentage it contributed". Work that through: night D
+   gets a share of the delta proportional to its share of the projected figure,
+   so its corrected fee is fee_D x (actual / projected). Re-pricing every row at
+   a rate scaled by the same ratio gives fee_D x (newRate / oldRate), which is
+   the same number. The two rules agree.
+
+   Solving the rate is the better shape of the same answer, and not by a little:
+   the rate is what every screen already reads, so the correction reaches the
+   calendar, the statement, the week and month rollups and per-break profit on
+   its own. A correction bolted on top would have to be taught to each of them,
+   and the one it was not taught would quietly disagree with the rest.
+
+   ## What must NOT be done this way
+
+   Gross is DEFINED as net plus the modelled fees, and a four-layer checksum
+   fails loudly if `grossSales - totalFees` is ever a cent off `netSales`. So
+   revenue and fees cannot be scaled by their own separate factors: that implies
+   a payout different from the one the platform actually sent, and the screen
+   would go red and say the figures do not add up. Correcting the RATE keeps the
+   identity by construction, because everything is re-derived through it.
+   =========================================================================== */
+
+export interface SolvedRates {
+  /** The arithmetic, for anything that wants to show its working. */
+  fit: StatementFit | null
+  /** Ready to save, or null when the figures cannot honestly produce terms. */
+  period: RatePeriodInput | null
+  /** Why not, in the operator's words. Null when `period` is set. */
+  problem: string | null
+}
+
+/**
+ * Solve the commission and card rates a stated month implies, as a rate period.
+ *
+ * ## The refusals are the substance
+ *
+ * SAME WINDOW FIRST, before any rate is spoken of. `fitStatement` compares the
+ * statement's own sales-side net — sales minus commission minus processing —
+ * against the net the ledger holds for those days. Both are recorded money, so a
+ * gap there is not a fee schedule: the app is holding a different set of orders
+ * from the ones the document covers. Re-pricing the month to close a hole of
+ * that kind would bury the very thing worth finding, and it would be wrong.
+ *
+ * BOTH MODELLED LINES, OR NEITHER. Fitting the commission from a statement that
+ * itemises only the total would silently attribute the card charge to the
+ * commission, and the resulting rate would look plausible and reproduce the
+ * right revenue for the wrong reason — until the day the card charge changed.
+ *
+ * THE FLAT CHARGE IS PINNED AT ZERO, which `fitStatement` documents: one window
+ * is one equation and the card charge has two unknowns. Zero is the falsifiable
+ * choice, and the residual is what says whether a flat charge exists.
+ */
+export function solveRatesFor(
+  statement: Pick<
+    WhatnotStatement,
+    'fromDate' | 'toDate' | 'statedGross' | 'statedCommission' | 'statedProcessing'
+  >,
+  app: WindowFigures,
+  taxRate: number
+): SolvedRates {
+  const commission = statement.statedCommission
+  const processing = statement.statedProcessing
+  if (commission === null || commission === undefined || processing === null || processing === undefined) {
+    return {
+      fit: null,
+      period: null,
+      problem:
+        'This statement does not give the commission and payment processing lines separately. Edit it and type both — they are the only two figures on the document this app models, and fitting one from a combined total would put the card charge into the commission.'
+    }
+  }
+  const sales = n(statement.statedGross)
+  if (!(sales > 0)) {
+    return { fit: null, period: null, problem: 'This statement states no sales to solve a rate from.' }
+  }
+
+  const fit = fitStatement({ sales, commission, processing }, app, taxRate)
+
+  if (!fit.sameWindow) {
+    return {
+      fit,
+      period: null,
+      problem:
+        `The statement's own sales less its two fee lines comes to ${money(fit.statementNet)}, but the ledger holds ` +
+        `${money(n(app.netPaid))} of sales for these days — ${money(fit.windowGap)} apart. Both are recorded figures, so no rate ` +
+        'explains that: either the window covers different days from the document, or the import is missing rows. ' +
+        'Settle that first — a rate solved against the wrong set of orders is worse than the default.'
+    }
+  }
+
+  const rate = fit.fittedCommissionRate
+  const cardRate = fit.fittedProcessingRate
+  if (!Number.isFinite(rate) || rate < COMMISSION_RATE_MIN || rate > COMMISSION_RATE_MAX) {
+    return {
+      fit,
+      period: null,
+      problem: `Those figures imply a commission of ${pct(rate)}, which is not a fee schedule — check the two fee lines against the document.`
+    }
+  }
+  if (!Number.isFinite(cardRate) || cardRate < 0 || cardRate > COMMISSION_RATE_MAX) {
+    return {
+      fit,
+      period: null,
+      problem: `Those figures imply a card charge of ${pct(cardRate)}, which is not a fee schedule — check the two fee lines against the document.`
+    }
+  }
+
+  return {
+    fit,
+    period: {
+      fromDate: statement.fromDate,
+      toDate: statement.toDate,
+      rate,
+      taxRate: n(taxRate),
+      processingRate: cardRate,
+      // See fittedProcessingFlatCents: one equation, two unknowns, and zero is
+      // the one that can be shown to be wrong afterwards.
+      processingFlatCents: 0,
+      scope: 'all',
+      note: `Solved from what Whatnot stated for ${statement.fromDate} to ${statement.toDate}`
+    },
+    problem: null
+  }
+}
 
 /**
  * ONE PLACE THAT KNOWS WHAT A STATEMENT IS MADE OF.

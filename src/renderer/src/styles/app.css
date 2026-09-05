@@ -29980,6 +29980,71 @@ button.sor-team:focus-visible {
   line-height: 1.45;
 }
 
+/* ---------- What the ledger figure is made of (RatesTab -> PayoutAgreement) --
+   Shown only when the payout and the ledger disagree. Inside a warn Note, so
+   the ground beneath it is already tinted — hence borders rather than a second
+   background, which would read as a panel inside a panel. */
+.fin-ledger-parts {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-variant-numeric: tabular-nums;
+}
+.fin-ledger-parts li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+.fin-ledger-parts li + li {
+  border-top: 1px solid var(--border);
+}
+.fin-ledger-parts li.is-total {
+  margin-top: 2px;
+  border-top: 1px solid var(--text-3);
+  font-weight: 600;
+}
+/* Rows the classifier could not name are carried at face value, so they are the
+   first place to look when a total is out — and the only line here that is a
+   question rather than a fact. */
+.fin-ledger-parts li.is-flag b {
+  color: var(--danger-strong);
+}
+.fin-ledger-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* ---------- The terms a statement implies (RatesTab -> ApplyRatesModal) ------
+   Three lines of arithmetic before the paragraph explaining it, because the
+   figures are the thing being agreed to and a confirm that buries them under
+   prose is a confirm nobody reads. */
+.fin-fit-solved {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.fin-fit-solved p {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.fin-fit-solved p + p {
+  border-top: 1px solid var(--border);
+}
+.fin-fit-solved b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- The month-end summary, as a form (RatesTab -> StatementModal) ----
    TWO LISTS WITH A TOTAL EACH, laid out the way the platform's own screen lays
    them out. The person filling this in is reading one screen and typing into

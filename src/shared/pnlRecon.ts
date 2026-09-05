@@ -201,6 +201,96 @@ export function reconRows(
  * Saturday that took $60,000 is the whole discrepancy, and a count cannot tell
  * those two apart.
  */
+/**
+ * WHAT THE LEDGER FIGURE IS MADE OF, so a gap can be found rather than stared at.
+ *
+ * The payout comparison prints one number against one number, and when they
+ * disagree that is exactly as far as it gets you. The owner, on a real month
+ * reading twenty thousand dollars apart: the total on its own cannot say whether
+ * that is tips, or postage, or rows the document does not cover.
+ *
+ * So this breaks the same figure into the buckets that make it, and the parts
+ * add back to `ledgerNet` exactly — asserted, because a breakdown that does not
+ * sum to the thing it explains is worse than no breakdown.
+ *
+ * WHAT IS DELIBERATELY ABSENT. Costs the operator typed — the expenses panel,
+ * the cost of stock broken on air, a prize given away — are not here and not in
+ * the total, because Whatnot never saw them and never deducted them. A payout is
+ * the platform's own arithmetic, and putting our own costs on that side of the
+ * comparison would report our bookkeeping as the platform's error.
+ */
+export interface LedgerParts {
+  /** The sale rows, at the net the platform paid. */
+  sales: number
+  tips: number
+  /** Seller bonuses — the platform's credits. */
+  bonuses: number
+  /** Money on rows this version of the classifier could not name. Face value. */
+  unrecognised: number
+  /** Postage, every term of it a ledger row. Usually negative. */
+  shipping: number
+  /** Show boosts. Negative. */
+  boosts: number
+  /** Refunded orders. Negative. */
+  refunds: number
+  /** The sum of the seven, and equal to `ledgerNet` over the same days. */
+  total: number
+}
+
+export function ledgerParts(
+  days: readonly StreamDayFinance[],
+  from: string,
+  to: string
+): LedgerParts {
+  const parts: LedgerParts = {
+    sales: 0,
+    tips: 0,
+    bonuses: 0,
+    unrecognised: 0,
+    shipping: 0,
+    boosts: 0,
+    refunds: 0,
+    total: 0
+  }
+  for (const d of days) {
+    // Blank ends mean no filter, matching reconInRange — the same rule, so the
+    // breakdown and the table it explains can never be looking at different days.
+    if (from && d.streamDate < from) continue
+    if (to && d.streamDate > to) continue
+    const sales = n(d.netSales)
+    const tips = n(d.tips)
+    const bonuses = n(d.bonuses)
+    parts.sales += sales
+    parts.tips += tips
+    parts.bonuses += bonuses
+    // netRevenue is netSales + tips + bonuses + unclassified, so what is left
+    // after the three named ones IS the unrecognised money. Derived rather than
+    // read because the day shape has no field for it — deliberately, so it stays
+    // visible instead of falling between two named buckets.
+    parts.unrecognised += n(d.netRevenue) - sales - tips - bonuses
+    parts.shipping += n(d.netShipping)
+    parts.boosts += n(d.showBoost)
+    parts.refunds += n(d.reversals)
+  }
+  parts.sales = c2(parts.sales)
+  parts.tips = c2(parts.tips)
+  parts.bonuses = c2(parts.bonuses)
+  parts.unrecognised = c2(parts.unrecognised)
+  parts.shipping = c2(parts.shipping)
+  parts.boosts = c2(parts.boosts)
+  parts.refunds = c2(parts.refunds)
+  parts.total = c2(
+    parts.sales +
+      parts.tips +
+      parts.bonuses +
+      parts.unrecognised +
+      parts.shipping +
+      parts.boosts +
+      parts.refunds
+  )
+  return parts
+}
+
 export function reconTotals(rows: readonly ReconRow[]): ReconTotals {
   const t: ReconTotals = {
     netPaid: 0,

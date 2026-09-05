@@ -76,6 +76,7 @@ const {
   grossFitVerdict,
   modelDivisor,
   payoutCheck,
+  solveRatesFor,
   statementInputFromRaw,
   statementTotals
 } = require('../src/shared/statementFit')
@@ -86,6 +87,7 @@ const {
 } = require('../src/main/db/whatnotStatements')
 const {
   checkWindow,
+  ledgerParts,
   pinTermsFor,
   reconInRange,
   reconRows,
@@ -1406,6 +1408,209 @@ console.log('\n--- it survives the round trip ---')
       may ? `${may.statedTips}/${may.statedRefunds}` : 'no row'
     )
   }
+}
+
+// ===========================================================================
+console.log('\n=== FROM A STATED MONTH TO THE TERMS THAT PRODUCED IT ===')
+// ===========================================================================
+/*
+ * The owner's rule, in his words: split the gap between projected and actual
+ * across the nights "based on the percentage it contributed". Section 1 below
+ * shows that solving a rate IS that rule — a night's fee moves by the ratio of
+ * the new rate to the old, which is its share of the correction — and section 2
+ * is the set of refusals, which are the substance.
+ *
+ * Invented figures throughout, chosen so the arithmetic is checkable by eye: a
+ * month that sold 100,000 at a true 6% commission and a true 2% card charge.
+ */
+{
+  const SALES = 100000
+  const COMMISSION = 6000 // 6% of sales
+  const PROCESSING = 2100 // 2% of the tax-inclusive total, at 5% tax
+  const TAX = 0.05
+  // What the ledger holds: sales less the two fee lines.
+  const NET = SALES - COMMISSION - PROCESSING
+
+  const app = {
+    netPaid: NET,
+    // What the app currently derives, at the wrong default 8%: irrelevant to the
+    // fit itself, and carried only so the gap can be reported.
+    derivedRevenue: 112000,
+    derivedCommission: -8960,
+    derivedProcessing: -3400,
+    orders: 900
+  }
+  const stmt = {
+    fromDate: '2026-04-01',
+    toDate: '2026-04-30',
+    statedGross: SALES,
+    statedCommission: COMMISSION,
+    statedProcessing: PROCESSING
+  }
+
+  const solved = solveRatesFor(stmt, app, TAX)
+  ok(solved.problem === null, 'a month that itemises both modelled lines solves', String(solved.problem))
+  ok(!!solved.period, 'and produces terms ready to save')
+  if (solved.period) {
+    ok(
+      Math.abs(solved.period.rate - 0.06) < 1e-9,
+      'THE COMMISSION IT SOLVES IS THE ONE THAT WAS CHARGED',
+      String(solved.period.rate)
+    )
+    ok(
+      Math.abs(solved.period.processingRate - PROCESSING / (SALES * (1 + TAX))) < 1e-9,
+      'and the card rate is solved on the TAX-INCLUSIVE total, as the model charges it',
+      String(solved.period.processingRate)
+    )
+    ok(solved.period.fromDate === '2026-04-01' && solved.period.toDate === '2026-04-30',
+      'the period covers exactly the days the document does', `${solved.period.fromDate}..${solved.period.toDate}`)
+    ok(solved.period.processingFlatCents === 0, 'with the flat charge pinned at zero', String(solved.period.processingFlatCents))
+    ok(solved.period.scope === 'all', 'and applying to everything sold', String(solved.period.scope))
+    ok(/Whatnot stated/.test(solved.period.note), 'the note says where it came from', solved.period.note)
+  }
+
+  // THE OWNER'S RULE AND THIS RULE ARE THE SAME ARITHMETIC.
+  //
+  // His: night D takes a share of the delta equal to its share of the projected
+  // figure. Ours: every row is re-priced at the solved rate. Work both over a
+  // month of three nights and they land on the same per-night fee.
+  {
+    const nights = [30000, 45000, 25000] // what each night sold, summing to SALES
+    const oldRate = 0.08
+    const projected = nights.map((v) => v * oldRate)
+    const projectedTotal = projected.reduce((a, b) => a + b, 0)
+    const actualTotal = COMMISSION
+    const delta = actualTotal - projectedTotal
+
+    const ownersWay = projected.map((p) => p + delta * (p / projectedTotal))
+    const ratesWay = nights.map((v) => v * (solved.period ? solved.period.rate : 0))
+
+    const same = ownersWay.every((v, i) => Math.abs(v - ratesWay[i]) < 1e-6)
+    ok(same, 'SPLITTING THE DELTA BY SHARE AND RE-PRICING AT THE SOLVED RATE AGREE, NIGHT BY NIGHT',
+      ownersWay.map((v, i) => `${v.toFixed(2)} vs ${ratesWay[i].toFixed(2)}`).join(' | '))
+    ok(
+      Math.abs(ratesWay.reduce((a, b) => a + b, 0) - actualTotal) < 1e-6,
+      'and the nights add back up to the figure the platform stated',
+      String(ratesWay.reduce((a, b) => a + b, 0))
+    )
+  }
+}
+
+console.log('\n--- what it refuses to solve ---')
+{
+  const base = {
+    fromDate: '2026-04-01',
+    toDate: '2026-04-30',
+    statedGross: 100000,
+    statedCommission: 6000,
+    statedProcessing: 2100
+  }
+  const app = { netPaid: 91900, derivedRevenue: 112000, derivedCommission: -8960, derivedProcessing: -3400, orders: 900 }
+
+  // BOTH MODELLED LINES OR NEITHER. A commission fitted from a statement that
+  // only gives a combined total swallows the card charge, and the rate looks
+  // plausible and reproduces the right revenue for the wrong reason.
+  const noSplit = solveRatesFor({ ...base, statedProcessing: null }, app, 0.05)
+  ok(!!noSplit.problem && noSplit.period === null, 'a statement without the two lines apart is refused', String(noSplit.problem))
+  ok(/commission and payment processing/i.test(noSplit.problem || ''), 'and told exactly what to go and type', String(noSplit.problem))
+
+  // THE WINDOW COMES FIRST. Both sides here are recorded money, so a gap is the
+  // wrong set of rows — and re-pricing to close it would bury the real fault.
+  const wrongRows = solveRatesFor(base, { ...app, netPaid: 80000 }, 0.05)
+  ok(!!wrongRows.problem && wrongRows.period === null, 'A WINDOW THAT DOES NOT TIE IS REFUSED BEFORE ANY RATE IS SPOKEN OF', String(wrongRows.problem))
+  ok(
+    /apart/.test(wrongRows.problem || '') && /no rate/i.test(wrongRows.problem || ''),
+    'and the sentence names the gap and says a rate cannot fix it',
+    String(wrongRows.problem)
+  )
+
+  // A figure that implies an absurd schedule is a typo, not a fee.
+  const absurd = solveRatesFor({ ...base, statedCommission: 60000, statedProcessing: 2100 }, { ...app, netPaid: 37900 }, 0.05)
+  ok(!!absurd.problem && absurd.period === null, 'a commission over the ceiling is refused', String(absurd.problem))
+
+  const noSales = solveRatesFor({ ...base, statedGross: 0 }, app, 0.05)
+  ok(!!noSales.problem, 'and so is a window with no sales to solve against', String(noSales.problem))
+}
+
+// ===========================================================================
+console.log('\n=== WHAT THE LEDGER FIGURE IS MADE OF ===')
+// ===========================================================================
+/*
+ * The owner, on a real month reading twenty thousand dollars apart from the
+ * document: a total against a total says only that they differ. His first
+ * instinct was that the costs he types in himself were being counted, which is
+ * exactly the right question and — as section 2 pins — not what happens.
+ */
+{
+  const day = (over: Record<string, number>): Record<string, unknown> => ({
+    streamDate: '2026-04-06',
+    netSales: 0, tips: 0, bonuses: 0, netRevenue: 0,
+    netShipping: 0, showBoost: 0, reversals: 0,
+    generalExpenses: 0, cogs: 0, giveawayLoss: 0, netProfit: 0,
+    ...over
+  })
+
+  // A night with one of everything. netRevenue is netSales + tips + bonuses +
+  // whatever the classifier could not name, so 1,000 of it here means 40 of
+  // unrecognised money.
+  const nights = [
+    day({
+      streamDate: '2026-04-06',
+      netSales: 900, tips: 25, bonuses: 35, netRevenue: 1000,
+      netShipping: -60, showBoost: -15, reversals: -20,
+      generalExpenses: -500, cogs: -300, giveawayLoss: -75
+    }),
+    day({ streamDate: '2026-04-13', netSales: 500, netRevenue: 500, netShipping: -10 })
+  ]
+
+  const p = ledgerParts(nights, '2026-04-01', '2026-04-30')
+  ok(p.sales === 1400, 'sales are the sale rows at what was paid', String(p.sales))
+  ok(p.tips === 25, 'tips are their own line', String(p.tips))
+  ok(p.bonuses === 35, 'and so are seller bonuses', String(p.bonuses))
+  ok(p.unrecognised === 40, 'MONEY THE CLASSIFIER COULD NOT NAME IS SHOWN, not folded away', String(p.unrecognised))
+  ok(p.shipping === -70, 'postage is one line across the window', String(p.shipping))
+  ok(p.boosts === -15 && p.refunds === -20, 'boosts and refunds are separate', `${p.boosts}/${p.refunds}`)
+
+  // THE ASSERTION THE BREAKDOWN LIVES OR DIES ON. A list that does not add up to
+  // the figure it explains is worse than no list.
+  const summed = p.sales + p.tips + p.bonuses + p.unrecognised + p.shipping + p.boosts + p.refunds
+  ok(Math.abs(summed - p.total) < 0.005, 'AND THE PARTS ADD BACK TO THE TOTAL', `${summed} vs ${p.total}`)
+  ok(p.total === 1395, 'which is what the ledger holds for these days', String(p.total))
+
+  // WHAT IS NOT IN IT, and this is the owner's question answered.
+  //
+  // 500 of typed expenses, 300 of stock broken on air and a 75 prize are all on
+  // that first night, and none of them moves this figure by a cent. Whatnot
+  // never saw them, so putting them on this side of a payout comparison would
+  // report our own bookkeeping as the platform's error.
+  const withoutOurCosts = ledgerParts(
+    [
+      day({
+        streamDate: '2026-04-06',
+        netSales: 900, tips: 25, bonuses: 35, netRevenue: 1000,
+        netShipping: -60, showBoost: -15, reversals: -20,
+        generalExpenses: 0, cogs: 0, giveawayLoss: 0
+      }),
+      day({ streamDate: '2026-04-13', netSales: 500, netRevenue: 500, netShipping: -10 })
+    ],
+    '2026-04-01',
+    '2026-04-30'
+  )
+  ok(
+    withoutOurCosts.total === p.total,
+    'OUR OWN COSTS CHANGE IT BY NOTHING — expenses, broken stock and a prize are all absent',
+    `${withoutOurCosts.total} vs ${p.total}`
+  )
+
+  // The window is honoured, and a blank end means no bound — the same rule
+  // reconInRange keeps, so the breakdown and the table agree on which days.
+  const aprilSixth = ledgerParts(nights, '2026-04-06', '2026-04-06')
+  ok(aprilSixth.sales === 900, 'a one-day window takes that day alone', String(aprilSixth.sales))
+  // BOTH ENDS, not just the far one: a window that starts after the first night
+  // must drop it, which is the case a `to`-only filter would pass by accident.
+  const fromTheThirteenth = ledgerParts(nights, '2026-04-13', '2026-04-30')
+  ok(fromTheThirteenth.sales === 500, 'and a window that starts late drops the nights before it', String(fromTheThirteenth.sales))
+  ok(ledgerParts(nights, '', '').total === p.total, 'and blank ends mean every night', String(ledgerParts(nights, '', '').total))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
