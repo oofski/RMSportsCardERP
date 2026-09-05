@@ -121,6 +121,16 @@ export function RangeWidgets({
   const fees = sub('fees')
   const net = sub('netProfit')
 
+  /**
+   * The four charges in the fee section that are NOT the two the app models.
+   *
+   * Read as a remainder rather than summed from the day, so it cannot disagree
+   * with the tile above it: whatever the section holds beyond commission and
+   * processing is what this names, including anything a later version adds to
+   * that section and forgets to mention here.
+   */
+  const otherFees = Math.round((fees - totals.whatnotFee - totals.processingFee) * 100) / 100
+
   // Denominator is GROSS SALES, not total revenue: fees are only ever charged on
   // sales — tips and bonuses arrive whole — so dividing by total revenue would
   // dilute the rate on any day with a tip and understate what the platform
@@ -197,7 +207,12 @@ export function RangeWidgets({
     },
     {
       key: 'fees',
-      label: 'Platform fees',
+      // NAMED THE WAY THE PLATFORM NAMES IT, because the whole point of the tile
+      // now is that it can be read beside the month-end summary. It is no longer
+      // the two modelled cuts: it is everything Whatnot took — commission, card
+      // processing, seller paid shipping, surcharges, refunds and its own
+      // adjustments — which is what its "Fees & costs" total means.
+      label: 'Fees & costs',
       amount: fees,
       prior: priorSub('fees'),
       magnitude: true,
@@ -207,13 +222,22 @@ export function RangeWidgets({
       // including the sales tax the buyer paid, plus a flat charge per order.
       // Both are configurable by date on the Rates tab. One combined figure
       // hides which of them moved.
+      //
+      // AND THE REST IS NAMED AS A REMAINDER rather than left off. The tile used
+      // to hold exactly the two figures its sub-line quoted; now it holds four
+      // more, and a sub-line that accounts for only part of the number above it
+      // sends a reader hunting for arithmetic that was never wrong. `feeRate` is
+      // deliberately still the share of gross the WHOLE figure is.
       sub:
-        isZero(totals.whatnotFee) && isZero(totals.processingFee) ? (
-          "Whatnot's cut and card processing"
+        isZero(totals.whatnotFee) && isZero(totals.processingFee) && isZero(otherFees) ? (
+          "Whatnot's cut, card processing, postage and refunds"
         ) : (
           <>
             {moneyText(Math.abs(totals.whatnotFee))} commission ·{' '}
             {moneyText(Math.abs(totals.processingFee))} processing
+            {isZero(otherFees)
+              ? null
+              : ` · ${moneyText(Math.abs(otherFees))} postage, refunds and adjustments`}
             {feeRate === null ? null : ` · ${feeRate.toFixed(2)}% of gross`}
           </>
         )

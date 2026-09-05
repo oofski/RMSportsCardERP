@@ -2787,105 +2787,78 @@ export function buildPnl(d: {
       running: true
     },
     {
+      // ONE SECTION FOR EVERYTHING THE PLATFORM TOOK, matching what its own
+      // month-end summary prints under "Fees & costs" — commission, payment
+      // processing, seller paid shipping and handling, shipping surcharges,
+      // order refunds and its other adjustments.
+      //
+      // These were four sections: Platform fees, Shipping, Other show costs and
+      // Adjustments. Every one of them is money Whatnot took and wrote into the
+      // export, and split four ways there was no figure anywhere in this app
+      // that could be put beside the total on the document. The owner, sending
+      // that document over: "everything under fees should be under the fees."
+      //
+      // NOTHING IS COUNTED TWICE, which is the whole risk of this change: four
+      // subtotals became one subtotal over the same eight lines, so
+      // `pnlChecksum` sums to the same figure and NET PROFIT DOES NOT MOVE BY A
+      // CENT. A test asserts exactly that, at every grain.
+      //
+      // GENERAL EXPENSES STAYS OUT, in the section below. Everything here is a
+      // charge Whatnot levied, so this subtotal can be checked against a Whatnot
+      // screen line for line. That is money somebody typed. Folding them
+      // together would produce one figure that is half auditable and half not —
+      // and the half that is not is precisely the half a reader wants flagged.
       key: 'fees',
-      label: 'Platform fees',
+      label: 'Fees & costs',
       lines: [
         // TWO CUTS ON TWO DIFFERENT BASES, so they are never one line. The
         // commission is charged on the item price alone; card processing is
         // charged on the whole order, sales tax included, plus a flat charge per
         // order. One combined percentage would be a number matching neither.
+        //
+        // They are also the ONLY TWO LINES HERE THE APP MODELS. The six below
+        // are ledger rows read as they were written, which is why a month that
+        // disagrees on those means missing rows rather than a wrong rate — see
+        // `solveRatesFor`.
         line('whatnotFee', 'Whatnot commission', d.whatnotFee, feeDetail),
         // Written as the sum it is, so a person can reproduce it with a
-        // calculator \u2014 including WHICH total the percentage runs on.
+        // calculator — including WHICH total the percentage runs on.
         //
         // THE SALES TAX RIDES ON THE DETAIL'S TOOLTIP rather than in the section
-        // note. It answers exactly one question \u2014 why this charge is more than
-        // the card percentage of sales \u2014 and it is asked by whoever is already
+        // note. It answers exactly one question — why this charge is more than
+        // the card percentage of sales — and it is asked by whoever is already
         // squinting at this line, so the standing note is the wrong place to
         // make every other reader walk past it.
         {
           ...line('processingFee', 'Payment processing', d.processingFee, processingDetail),
           detailHint:
             `The commission is charged on the sale price; card processing is charged on the ` +
-            `order total \u2014 that sale price plus ${usd(salesTax)} of sales tax the buyers ` +
+            `order total — that sale price plus ${usd(salesTax)} of sales tax the buyers ` +
             `paid. That tax is not revenue and not a cost: it passes to the state and appears ` +
             `in no figure on this statement.`
-        }
-      ],
-      subtotal: c2(d.totalFees),
-      subtotalLabel: 'Total fees',
-      note:
-        `Whatnot pays net \u2014 these two were already deducted. Sales minus both equals the ` +
-        `payout exactly.`
-    },
-    {
-      // POSTAGE IS BACK ON THE STATEMENT, and the four lines are the four the
-      // ledger actually carries — subsidy received, postage charged back,
-      // giveaway postage and refund postage — subtotalling to `netShipping`.
-      //
-      // It was taken off for a release on the owner's instruction ("we will add
-      // this cost in for some other way but right now not necessary") and net
-      // profit was higher by exactly this subtotal on every day and every period
-      // while it was gone. Nothing had to be recomputed to bring it back: the
-      // five fields behind these lines were never removed from a day and never
-      // stopped rolling up, which was the whole reason they were kept.
-      //
-      // FOUR LINES RATHER THAN ONE NET FIGURE, because they run opposite ways.
-      // The subsidy is money Whatnot puts in and the other three take money out;
-      // a single "shipping" line would net a contribution against a cost and
-      // leave a reader unable to tell a cheap month from a well-subsidised one.
-      //
-      // Every line here is EXPORT money — Whatnot wrote each of these rows — so
-      // the subtotal can be checked against a Whatnot screen, and each line
-      // drills to the rows behind it. That is also what let the reconciliation's
-      // row-side strip go: the statement claims this money now, so the check no
-      // longer has to hand it back.
-      key: 'shipping',
-      label: 'Shipping',
-      lines: [
+        },
+        // FOUR POSTAGE LINES RATHER THAN ONE NET FIGURE, because they run
+        // opposite ways. The subsidy is money Whatnot puts in and the other
+        // three take money out; a single "shipping" line would net a
+        // contribution against a cost and leave a reader unable to tell a cheap
+        // month from a well-subsidised one.
         line('shippingSubsidy', 'Shipping subsidy', d.shippingSubsidy),
         line('shippingCharges', 'Postage charged back', d.shippingCharges),
         // Named for the act rather than the bucket: "giveaway postage" is what
         // it cost to MAIL a prize, and it is not the prize. That cost is
-        // `giveawayCost`, two sections up in cost of goods, and conflating the
-        // two is the mistake this label exists to prevent.
+        // `giveawayCost`, up in cost of goods, and conflating the two is the
+        // mistake this label exists to prevent.
         line('giveawayShipping', 'Giveaway postage', d.giveawayShipping),
-        line('refundShipping', 'Postage on refunds', d.refundShipping)
+        line('refundShipping', 'Postage on refunds', d.refundShipping),
+        line('showBoost', 'Show Boost', d.showBoost),
+        line('reversals', 'Refunded orders', d.reversals)
       ],
-      subtotal: c2(d.netShipping),
-      subtotalLabel: 'Net shipping',
+      subtotal: c2(c2(d.totalFees) + c2(d.netShipping) + c2(d.showBoost) + c2(d.reversals)),
+      subtotalLabel: 'Fees & costs',
       note:
-        `Postage Whatnot handled: what it paid toward shipping, less what it charged back. ` +
-        `Mailing a giveaway is here; what the giveaway itself cost is in cost of goods.`
-    },
-    // AND THERE IS NO PACKAGING SECTION EITHER, FOR THE OPPOSITE REASON.
-    //
-    // Sleeves, top loaders, team bags, shipping labels, team bag stickers and
-    // mailers were six lines subtotalling to "Packaging" in this slot, and the
-    // owner took that cost off the statement too, to account for it another way.
-    // Net profit is higher by exactly what those six came to, on every day and
-    // every period.
-    //
-    // WHERE IT DIFFERS FROM THE POSTAGE ABOVE, and the difference is the one
-    // thing a reader has to carry away: no ledger row has ever held a sleeve.
-    // Packaging was money the statement CLAIMED that Whatnot's export cannot
-    // corroborate, so while it lived here the day-versus-rows reconciliation had
-    // to strip it from the DAY side to make the two comparable. Now that no
-    // section claims it, that strip has gone with it — a strip left behind would
-    // have made the day side short by exactly the packaging and put "these
-    // numbers do not add up" over a correct statement, which is the failure the
-    // release before last existed to remove.
-    //
-    // The fourteen fields behind these lines are still on every day, still
-    // computed from the same model and still summed through every rollup — see
-    // `StreamDayFinance`, which says why — so putting the cost back is adding a
-    // section here and taking the day-side strip back in `buildView`.
-    {
-      key: 'showCosts',
-      label: 'Other show costs',
-      lines: [line('showBoost', 'Show Boost', d.showBoost)],
-      subtotal: c2(d.showBoost),
-      subtotalLabel: 'Show costs'
+        `Whatnot pays net, so every charge here was already deducted before the money arrived. ` +
+        `They are the lines its own month-end summary prints under Fees and costs, one each — ` +
+        `so what it credited less this subtotal is the payout exactly.`
     },
     {
       // ITS OWN SECTION, not a second line under "Other show costs", and the
@@ -2918,13 +2891,12 @@ export function buildPnl(d: {
       subtotal: general,
       subtotalLabel: 'General expenses'
     },
-    {
-      key: 'adjustments',
-      label: 'Adjustments and exceptions',
-      lines: [line('reversals', 'Refunded orders', d.reversals)],
-      subtotal: c2(d.reversals),
-      subtotalLabel: 'Adjustments'
-    },
+    // AND THERE IS NO "ADJUSTMENTS AND EXCEPTIONS" SECTION, for the same reason
+    // there is no separate Shipping or Other show costs one: refunded orders are
+    // money Whatnot took, its summary prints them under Fees & costs, and they
+    // are now the last line of that section. A section of their own put the same
+    // figure in a second place on the statement and left the fee subtotal unable
+    // to be compared with anything the platform states.
     {
       key: 'netProfit',
       label: 'Net profit',

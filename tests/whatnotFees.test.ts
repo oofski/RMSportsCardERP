@@ -1777,11 +1777,27 @@ ok(!!genA, 'the statement has a General expenses section of its own')
 ok(cents(genA.subtotal) === cents(-24.99), 'holding the day figure', String(genA.subtotal))
 ok(genA.lines.length === 1 && !genA.lines[0].empty, 'with one line on it')
 ok(/1 entry/.test(String(genA.lines[0].detail)), 'that says how many entries are behind it', String(genA.lines[0].detail))
-// It is deliberately NOT under "Other show costs": that section is what Whatnot
-// charged and can be checked line for line against a Whatnot screen.
-const showA = buildPnl(nightA).find((s: any) => s.key === 'showCosts')
-ok(cents(showA.subtotal) === cents(nightA.showBoost), 'and Show costs still holds only what the platform charged',
-   `${showA.subtotal} vs ${nightA.showBoost}`)
+// It is deliberately NOT under "Fees & costs": everything in that section is a
+// charge Whatnot levied and wrote into the export, so its subtotal can be
+// checked against a Whatnot screen line for line. This is money somebody typed.
+const feesA = buildPnl(nightA).find((s: any) => s.key === 'fees')
+ok(!!feesA, 'the statement has a Fees & costs section')
+ok(
+  !feesA.lines.some((l: any) => l.key === 'generalExpenses'),
+  'and what the operator typed is not one of its lines',
+  JSON.stringify(feesA.lines.map((l: any) => l.key))
+)
+// Its subtotal is every platform charge and nothing else — the write-off does
+// not move it, which is the property that keeps it comparable with a document.
+ok(
+  cents(feesA.subtotal) ===
+    cents(nightA.totalFees) +
+      cents(nightA.netShipping) +
+      cents(nightA.showBoost) +
+      cents(nightA.reversals),
+  'its subtotal is what the platform charged, and only that',
+  `${feesA.subtotal}`
+)
 
 checksumOk(nightA, 'night A with an expense')
 checksumOk(nightB, 'night B with an expense')
