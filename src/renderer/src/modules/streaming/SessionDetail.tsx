@@ -248,7 +248,9 @@ export function SessionDetail({
         <div className="stm-inline-note recon">
           <Icon name="History" size={14} />
           <span>
-            <b>This show is history.</b> Lines added here record cost only — no stock moves.
+            <b>This show is history.</b> A line here records what it cost and moves nothing —
+            unless the stock is still on the shelf, in which case the form offers to take it off
+            and cost it from the layers it came in on.
           </span>
         </div>
       )}
@@ -265,8 +267,8 @@ export function SessionDetail({
         <div className="stm-inline-note">
           <Icon name="Timer" size={14} />
           <span>
-            <b>Ended.</b> {formatWindowLeft(drawWindowLeft)} to add lines that come off the shelf —
-            after that they record cost only.
+            <b>Ended.</b> {formatWindowLeft(drawWindowLeft)} while lines come off the shelf without
+            asking — after that the form asks, and only offers it while the stock is still there.
           </span>
         </div>
       )}
@@ -308,7 +310,7 @@ export function SessionDetail({
           <b className="mono">{formatMoney(totals.totalCost)}</b>
           <em>
             {reconcile
-              ? 'everything broken on air — reconciled lines at the price entered for them'
+              ? 'everything broken on air — at the price entered, or at what the layers cost when it came off the shelf'
               : 'everything consumed on air, at FIFO cost'}
           </em>
         </div>

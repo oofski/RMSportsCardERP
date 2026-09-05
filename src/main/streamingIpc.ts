@@ -282,6 +282,26 @@ export function registerStreamingIpc(): void {
       if (input?.casePrice !== undefined && input.casePrice !== null) {
         payload.casePrice = parseMoneyInput(input.casePrice)
       }
+      // A reconciliation the operator chose to take off the shelf. A plain
+      // boolean, and `=== true` rather than truthy so a stray string cannot turn
+      // a price-only line into one that moves stock.
+      if (input?.fromShelf === true) payload.fromShelf = true
+      /**
+       * WHICH COST LAYERS THE LINE TAKES, and it was missing from this list.
+       *
+       * The picker has been on the form since split-shelf entry shipped, the
+       * write reads `input.allocation`, and this handler rebuilt the payload
+       * field by field without it — so every allocation an operator chose was
+       * dropped in transit and the oldest layers were consumed instead. No
+       * error, no warning: the picker opened, the choice was made, and the
+       * write never saw it.
+       *
+       * That is the third field this boundary has swallowed silently. Passed
+       * through as it arrives, because `tidyPicks` in the write is what decides
+       * whether a pick is well formed and it should stay the only thing that
+       * does.
+       */
+      if (Array.isArray(input?.allocation)) payload.allocation = input.allocation
       return addItem(payload, actor.id)
     } catch (err) {
       return fail(err)

@@ -30045,6 +30045,56 @@ button.sor-team:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- Where a reconciliation's cost comes from (AddItemForm) ----------
+   Two radios with a sentence each, not a tick. A tick would make one answer the
+   silent default, and the two answers here move different things: one drops the
+   count and books what the layers cost, the other moves nothing and books what
+   somebody typed. Getting that wrong is a case of stock counted off twice or
+   never — so both readings are written out and neither is the quiet one. */
+.stm-shelf-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stm-shelf-choice label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+.stm-shelf-choice label:hover {
+  background: var(--surface-2);
+}
+.stm-shelf-choice input {
+  margin-top: 2px;
+  flex: none;
+}
+.stm-shelf-choice span {
+  display: block;
+  min-width: 0;
+}
+.stm-shelf-choice b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.stm-shelf-choice em {
+  display: block;
+  font-style: normal;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+/* The chosen one, so the answer is readable without hunting for a filled dot. */
+.stm-shelf-choice label:has(input:checked) {
+  border-color: var(--brand-500);
+  background: var(--surface-2);
+}
+
 /* ---------- The month-end summary, as a form (RatesTab -> StatementModal) ----
    TWO LISTS WITH A TOTAL EACH, laid out the way the platform's own screen lays
    them out. The person filling this in is reading one screen and typing into

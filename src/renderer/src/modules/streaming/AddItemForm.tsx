@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import type { NewStreamItem, StreamItemKind, StreamSessionDetail } from '@shared/streaming'
-import { parseMoneyInput } from '@shared/streaming'
+import { parseMoneyInput, shelfCanCover } from '@shared/streaming'
 import type { LotPick } from '@shared/costLots'
 import { LOCATIONS, type Location } from '@shared/inventory'
 import {
@@ -161,6 +161,29 @@ export function AddItemForm({
    */
   const reconUnit: StockUnit | null = reconcile ? (units?.unitType ?? null) : null
 
+  /**
+   * ON A RECONCILIATION, IS THE STOCK STILL ON THE SHELF?
+   *
+   * The owner: "when I am reconciling a break and putting something from the
+   * inventory then it needs to come in from the inventory and pull from there
+   * directly."
+   *
+   * Past the 24-hour window the usual reason a line is late is that its stock
+   * has already gone, counted off after the show — deducting it again would take
+   * the same cases off twice. But the cases are often still sitting there, and
+   * then the layers they arrived in already say what they cost to the cent, and
+   * typing a price invents a second figure for stock the app can value exactly.
+   *
+   * ASKED, NOT INFERRED. Stock being on hand does not prove it was never counted
+   * off — it could have been restocked since. Only the person at the bench
+   * knows, so this is a choice, defaulted to taking it off the shelf whenever
+   * the shelf can cover it, because that is the case the owner was describing.
+   */
+  const [fromShelf, setFromShelf] = useState(false)
+  /** Set once the operator picks for themselves, so the default stops moving
+   *  under them when the quantity or the location changes. */
+  const touchedShelf = useRef(false)
+
   /** The two fields this kind of line is entered in: cases + boxes for a break,
    *  boxes + packs for a giveaway. Null means the field is not a whole number.
    *  A reconciliation is entered in ONE of them — the product's own stock unit —
@@ -192,7 +215,9 @@ export function AddItemForm({
    * accepts is a price the write accepts.
    */
   const unitPrice = parseMoneyInput(unitPriceRaw)
-  const priceOk = reconcile ? Number.isFinite(unitPrice) && unitPrice >= 0 : true
+  // Only demanded when nothing is coming off the shelf — a line drawn from the
+  // shelf is costed by the layers it takes, and main refuses a price beside it.
+  const priceOk = reconcile && !fromShelf ? Number.isFinite(unitPrice) && unitPrice >= 0 : true
 
   /**
    * What the entry converts to, in the product's own stock unit — or the
@@ -237,6 +262,27 @@ export function AddItemForm({
       : null
 
   const onHand = product ? (product.quantityByLocation[location] ?? 0) : 0
+
+  /**
+   * Whether a reconciliation may take THIS line off the shelf, by the same rule
+   * main applies before moving anything. One function, so the offer on screen
+   * and the refusal at the write cannot disagree.
+   */
+  const shelf = useMemo(
+    () => (reconcile && quantity !== null ? shelfCanCover(onHand, quantity) : { ok: false, reason: null }),
+    [reconcile, onHand, quantity]
+  )
+  // Default to the shelf the moment it can cover the line, and fall back the
+  // moment it cannot — a tick left on against an empty shelf would send a line
+  // main is bound to refuse.
+  useEffect(() => {
+    if (!reconcile) {
+      if (fromShelf) setFromShelf(false)
+      return
+    }
+    if (!shelf.ok && fromShelf) setFromShelf(false)
+    if (shelf.ok && !touchedShelf.current) setFromShelf(true)
+  }, [reconcile, shelf.ok, fromShelf])
   // Same slack main uses when it checks stock: a giveaway that consumes the
   // exact fractional balance leaves float dust, and warning "only 0.25 on hand"
   // about a line that will succeed is worse than not warning at all.
@@ -335,7 +381,10 @@ export function AddItemForm({
        * the silence this replaced.
        */
       let allocation: LotPick[] | null = null
-      if (!reconcile) {
+      // ALSO FOR A RECONCILIATION THAT IS COMING OFF THE SHELF. It consumes cost
+      // layers exactly as a fresh line does, so which layers is the same
+      // question and must be asked the same way.
+      if (!reconcile || fromShelf) {
         const choice = await askAllocation({
           productId: product.id,
           location,
@@ -365,7 +414,10 @@ export function AddItemForm({
             // back out, so the number stored is the assertion the operator made
             // rather than a product of it — and correcting the count later
             // cannot leave a stale total behind.
-            casePrice: unitPrice,
+            // One or the other, never both: a line off the shelf is costed by
+            // the layers it takes and main refuses a price beside it.
+            casePrice: fromShelf ? null : unitPrice,
+            fromShelf: fromShelf || undefined,
             location,
             breakNumber: isBreak ? num : null,
             recipient: !isBreak ? recipient.trim() || null : null,
@@ -454,7 +506,12 @@ export function AddItemForm({
               // product.
               <>enter how much was broken and what one cost.</>
             )}{' '}
-            Today&rsquo;s shelf is untouched.
+            {/* Two different promises, and the wrong one is a case counted off
+                twice or never — so the sentence follows the choice rather than
+                stating the old default at a form that is no longer doing it. */}
+            {fromShelf
+              ? 'These are coming off the shelf, so they cost what they cost and the count drops.'
+              : 'Today\u2019s shelf is untouched.'}
           </div>
         </div>
       )}
@@ -566,6 +623,54 @@ export function AddItemForm({
                     autoFocus
                   />
                 </Field>
+                {/* WHERE THE COST COMES FROM, and the reason this is a question
+                    rather than a rule. Past the window the usual case is that
+                    the stock has already gone, counted off after the show, and
+                    deducting it again would take the same cases off twice. But
+                    the cases are often still on the shelf, and then the layers
+                    they came in on already say what they cost — so typing a
+                    price invents a second figure for stock the app can value
+                    exactly. Only the person at the bench knows which it is. */}
+                {shelf.ok && (
+                  <Field
+                    label="Where the cost comes from"
+                    hint={`${onHand} on the shelf at ${location}. Taking them off books what those cases actually cost and drops the count.`}
+                  >
+                    <div className="stm-shelf-choice">
+                      <label>
+                        <input
+                          type="radio"
+                          name="recon-cost-source"
+                          checked={fromShelf}
+                          onChange={() => {
+                            touchedShelf.current = true
+                            setFromShelf(true)
+                          }}
+                        />
+                        <span>
+                          <b>Take them off the shelf</b>
+                          <em>They are still in stock. Costs what they cost, and the count drops.</em>
+                        </span>
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="recon-cost-source"
+                          checked={!fromShelf}
+                          onChange={() => {
+                            touchedShelf.current = true
+                            setFromShelf(false)
+                          }}
+                        />
+                        <span>
+                          <b>They are already gone</b>
+                          <em>Counted off after the show. Record what one cost; nothing moves.</em>
+                        </span>
+                      </label>
+                    </div>
+                  </Field>
+                )}
+                {!fromShelf && (
                 <Field
                   label={`Price paid per ${entryWord(reconUnit, 1)}`}
                   hint={`What one ${entryWord(reconUnit, 1)} cost when you bought it`}
@@ -582,6 +687,7 @@ export function AddItemForm({
                     invalid={unitPriceRaw.trim() !== '' && !priceOk}
                   />
                 </Field>
+                )}
               </>
             ) : units ? (
               isBreak ? (
@@ -689,6 +795,8 @@ export function AddItemForm({
               unitPrice={unitPrice}
               priceOk={priceOk}
               total={statedTotal}
+              fromShelf={fromShelf}
+              onHand={onHand}
             />
           ) : (
             <DeductionPreview
@@ -836,7 +944,9 @@ function ReconcilePreview({
   unitPriceRaw,
   unitPrice,
   priceOk,
-  total
+  total,
+  fromShelf,
+  onHand
 }: {
   product: InventoryProduct
   units: ProductUnits | null
@@ -850,6 +960,10 @@ function ReconcilePreview({
   unitPrice: number
   priceOk: boolean
   total: number | null
+  /** The operator chose to take it off the shelf rather than price it. */
+  fromShelf: boolean
+  /** What is on the shelf at the chosen location, for the sentence. */
+  onHand: number
 }): JSX.Element {
   // Same order of precedence as the deduction preview: a shape problem in the
   // fields, then the contract's refusal, and both replace the block rather than
@@ -900,6 +1014,35 @@ function ReconcilePreview({
               : Number.isFinite(unitPrice)
                 ? `A ${entryWord(unit, 1)} cannot have cost less than nothing.`
                 : 'That is not a price. Enter an amount like 2400 or 2,400.00.'}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  /**
+   * COMING OFF THE SHELF, so there is no price to multiply and nothing to check
+   * a typed figure against.
+   *
+   * The preview below exists because a reconciliation has no shelf to catch a
+   * mistyped count — the total is the only check there is. This line does have
+   * one, so it says what will move instead of what was typed, and deliberately
+   * does NOT quote a cost: the layers decide that at the moment of writing, and
+   * a figure guessed here from the moving average would be a different number
+   * from the one that lands.
+   */
+  if (fromShelf) {
+    return (
+      <div className="stm-consume">
+        <Icon name="PackageMinus" size={15} />
+        <div className="stm-consume-body">
+          <span className="stm-recon-sum">
+            <b>{counted}</b> {entryWord(unit, counted)} off the shelf, of{' '}
+            <b>{onHand}</b> there now
+          </span>
+          <span>
+            Costed from the layers these came in on — you will pick which, next. The count drops by{' '}
+            {counted} {entryWord(unit, counted)}.
           </span>
         </div>
       </div>
