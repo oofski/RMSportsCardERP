@@ -260,8 +260,12 @@ export function applyInvoiceStock(
   )
   const out: InvoiceStockMove[] = []
   const touched = new Set<string>()
-  /** What this save had to buy at a shop to fill itself. See buyShortfallAtShop. */
-  const shopBuys: Array<{ shop: string; units: number }> = []
+  /**
+   * What this save had to buy at a shop to fill itself, and WHICH TAB it went
+   * onto. See buyShortfallAtShop — the order is carried, not just the count,
+   * because the liability has to be explained on the document that holds it.
+   */
+  const shopBuys: Array<{ shop: string; units: number; poId: string; poNumber: string }> = []
 
   for (const line of lines) {
     // THE SLICE'S OWN SHELF WHEN IT NAMES ONE. Only a split line ever does; an
@@ -298,9 +302,9 @@ export function applyInvoiceStock(
      */
     if (!fromPo && asked > have) {
       const bought = buyShortfallAtShop(db, line.productId, shelf, asked - have, actorId)
-      if (bought > 0) {
+      if (bought) {
         have = roundQty(Math.max(0, stockQty(line.productId, shelf)), fractional)
-        shopBuys.push({ shop: shelf, units: bought })
+        shopBuys.push({ shop: shelf, units: bought.units, poId: bought.poId, poNumber: bought.poNumber })
       }
     }
     /**
@@ -368,25 +372,59 @@ export function applyInvoiceStock(
 
   for (const productId of touched) syncProductAvgCost(db, productId)
   /**
-   * SAY WHAT THIS SALE BOUGHT, on the sale.
+   * SAY WHAT THIS SALE BOUGHT — ON BOTH DOCUMENTS.
    *
    * Filling a line by buying at a shop creates a real liability — a case we now
    * owe a shop for — and it happens as a SIDE EFFECT of saving a sales order.
    * An effect like that must not be silent, or the first anybody knows of it is
    * an unexplained line on a week's bill.
    *
+   * ## THAT IS EXACTLY WHAT HAPPENED, because it was only written on one of them
+   *
+   * The entry went on the SALE, which is the document somebody has just written
+   * and already understands. The unexplained line appears on the TAB, which is
+   * the document somebody opens a week later to work out what a shop is owed —
+   * and it said nothing. The owner, looking at a roadshow board with two shops
+   * he had never bought anything at, each holding a tab with one unpriced line:
+   * "why are there inventory items showing in California but nowhere else, that
+   * doesn't make sense?" Nothing on either screen could tell him the app had
+   * opened those tabs itself.
+   *
+   * So the same fact is recorded on the purchase order too, naming the sale that
+   * caused it. Two documents, one act, and either one can now be read on its own.
+   *
    * One entry per shop rather than per line, because two lines filled at the
-   * same counter are one trip and one act. It reads back on the order's own
-   * history, next to everything else that happened to it.
+   * same counter are one trip and one act.
    */
   if (shopBuys.length > 0) {
-    const byShop = new Map<string, number>()
-    for (const b of shopBuys) byShop.set(b.shop, (byShop.get(b.shop) ?? 0) + b.units)
-    for (const [shop, units] of byShop) {
+    const byShop = new Map<string, { units: number; poId: string; poNumber: string }>()
+    for (const b of shopBuys) {
+      const at = byShop.get(b.shop)
+      // The first tab wins when two lines somehow landed on different orders:
+      // the count is what matters to the sentence, and naming one of two orders
+      // is better than naming neither.
+      if (at) at.units += b.units
+      else byShop.set(b.shop, { units: b.units, poId: b.poId, poNumber: b.poNumber })
+    }
+    const sale = (
+      db.prepare('SELECT invoice_number FROM invoices WHERE id = ?').get(invoiceId) as
+        | { invoice_number: string | null }
+        | undefined
+    )?.invoice_number
+    const saleName = (sale ?? '').trim() || 'a sales order'
+    for (const [shop, at] of byShop) {
+      const many = at.units === 1 ? '' : 's'
       recordOrderEvent('so', invoiceId, 'link', {
         detail:
-          `Bought ${units} unit${units === 1 ? '' : 's'} at ${shop} to fill this order — ` +
-          'on that shop’s open tab, at a price still to be entered.',
+          `Bought ${at.units} unit${many} at ${shop} to fill this order — ` +
+          `on ${at.poNumber}, that shop’s open tab, at a price still to be entered.`,
+        actorId,
+        db
+      })
+      recordOrderEvent('po', at.poId, 'link', {
+        detail:
+          `${at.units} unit${many} added automatically to fill ${saleName} — the shelf at ${shop} ` +
+          'was short, so this tab bought them at a price still to be entered.',
         actorId,
         db
       })
@@ -428,6 +466,25 @@ export function applyInvoiceStock(
  * knowable from here. `cost_total` is 0, so the row reports its revenue and a
  * margin equal to it. Flagged rather than hidden — `costKnown` is false on those
  * rows so the screen can mark them instead of quietly overstating the month.
+ *
+ * ## AND ROWS WHOSE COST HAS NOT BEEN SAID YET, which is a different zero
+ *
+ * A roadshow case is bought on a tab at a price nobody knows and can be sold the
+ * same afternoon — that is the ordinary shape of a shop, not an edge case, and
+ * `buyShortAtShop` produces it without anybody choosing to. Its layer opens at
+ * zero, so the sale landed here reporting the whole sale price as margin.
+ *
+ * That zero reads exactly like a legacy one and is the opposite of it: the layer
+ * is right there and the figure is coming. So it gets its own flag, found by
+ * walking the slices this move consumed back to the purchase-order line that
+ * opened them and asking whether that line is still price-pending. The screen
+ * holds it out of the margin totals — a cost of nothing counted as a cost is the
+ * one failure this report must not have — and names the tab to go and price.
+ *
+ * IT CLEARS ITSELF. `setPurchaseOrderLinePrice` re-costs the layer AND the sales
+ * already drawn from it (see restateConsumedCost), which writes the real figure
+ * into `cost_total` on the very rows below. Nothing here is re-derived on the
+ * fly, so what this reports and what the ledger holds cannot drift.
  */
 
 export function listWholesaleSales(db: Database.Database, limit = 500): WholesaleSaleRow[] {
@@ -436,7 +493,19 @@ export function listWholesaleSales(db: Database.Database, limit = 500): Wholesal
       `SELECT m.invoice_id, m.product_id, m.location, m.quantity, m.cost_total, m.txn_id,
               i.invoice_number, i.invoice_date, i.customer_name, i.status,
               l.rate, l.item,
-              p.name AS product_name, p.sku AS product_sku
+              p.name AS product_name, p.sku AS product_sku,
+              -- The tab still owing a price on one of the layers these units
+              -- came off, or NULL when every layer has a real figure on it.
+              -- MIN because a move can walk several layers and one name is what
+              -- the screen has room for; the smallest number is the oldest tab,
+              -- which is the one that has been waiting longest.
+              (SELECT MIN(pend_po.po_number)
+                 FROM inventory_txn_lots pend_tl
+                 JOIN po_line_receipts pend_r ON pend_r.lot_id = pend_tl.lot_id
+                 JOIN purchase_order_lines pend_l ON pend_l.id = pend_r.po_line_id
+                 JOIN purchase_orders pend_po ON pend_po.id = pend_l.po_id
+                WHERE pend_tl.txn_id = m.txn_id
+                  AND pend_l.price_pending = 1) AS pending_po
          FROM invoice_stock_moves m
          JOIN invoices i ON i.id = m.invoice_id
          LEFT JOIN invoice_lines l
@@ -461,6 +530,7 @@ export function listWholesaleSales(db: Database.Database, limit = 500): Wholesal
     item: string | null
     product_name: string | null
     product_sku: string | null
+    pending_po: string | null
   }>
 
   return rows.map((r) => {
@@ -482,7 +552,9 @@ export function listWholesaleSales(db: Database.Database, limit = 500): Wholesal
       revenue,
       cost,
       margin: Math.round((revenue - cost) * 100) / 100,
-      costKnown: !!r.txn_id
+      costKnown: !!r.txn_id,
+      costPending: !!r.pending_po,
+      pendingPoNumber: r.pending_po ?? null
     }
   })
 }

@@ -3,7 +3,9 @@ import type { InvoiceDetail, InvoiceLine } from '@shared/invoices'
 import { invoiceTotal, lineAmount, money, qboTotalMismatch } from '@shared/invoices'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { api } from '../../lib/api'
-import { Button, Input, Modal } from '../../components/ui'
+import { Button, Checkbox, Field, Input, Modal } from '../../components/ui'
+import { PAYMENT_TIMINGS, togglePayment } from '@shared/freight'
+import type { PaymentTiming } from '@shared/freight'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { newDraftKey } from '../invoicing/helpers'
@@ -49,6 +51,33 @@ import { formatMoney } from '../../lib/format'
  * copy over there is squared.
  */
 
+/**
+ * ## WHAT THIS SCREEN BECAME
+ *
+ * The owner, looking at nine buttons on one card: "I just really need a way to
+ * edit to sales order at any point, add in dimensions ... the edit button should
+ * let me do a lot to the sales order too right that is all we need in that case".
+ *
+ * So three things changed. It opens on a DRAFT now — the gate that hid it there
+ * was a line in the card, not a rule in the backend, and `setInvoiceLines`,
+ * `setInvoiceDims` and `setInvoiceLineRouting` all sit behind `liveInvoiceOr`,
+ * which refuses only gone and void. It carries the MEASUREMENTS, which until now
+ * could be entered once from the fulfilment tick and then never corrected: once
+ * an order is measured the tick disappears, so a wrong weight was unfixable from
+ * the board even though the backend would have taken it. And it is the door to
+ * the three screens that used to have buttons of their own on the card.
+ *
+ * ## THOSE THREE ARE HAND-OFFS, NOT SECTIONS, AND THAT IS DELIBERATE
+ *
+ * Routing, the attached purchases and re-taking the shelf each have their own
+ * save and their own consequences, and `setInvoiceLines` CLEARS a line's
+ * per-case sourcing whenever its quantity moves. Folding routing into this
+ * screen's Save would mean one press where the order of two writes decides
+ * whether somebody's allocations survive — and there is no ordering that is
+ * right in both directions. A hand-off closes this screen and opens that one, so
+ * each save stays one press about one thing.
+ */
+
 /** One part of a line, as typed. Strings, so a half-typed "12." is not a zero. */
 type Part = { key: string; quantity: string; rate: string; amount: string; amountEdited: boolean }
 /** A line's whole state on this screen. One part means it is not split. */
@@ -57,16 +86,51 @@ type Draft = { parts: Part[]; removed: boolean }
 export function EditOrderModal({
   invoice,
   onClose,
-  onDone
+  onDone,
+  onRoute,
+  onAttachPo,
+  onBookStock
 }: {
   invoice: InvoiceDetail
   onClose: () => void
   onDone: () => void | Promise<void>
+  /** Hand off to the routing screen. See the header on why this is a hand-off. */
+  onRoute?: () => void
+  /** Hand off to the purchase-order attach screen. */
+  onAttachPo?: () => void
+  /** Re-take the shelf for this order. Resolves once the write has finished. */
+  onBookStock?: () => Promise<void>
 }): JSX.Element {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   /** Line id -> what has been typed. Only the lines somebody touched. */
   const [edits, setEdits] = useState<Record<string, Draft>>({})
+  /**
+   * THE PARCEL, as typed. Strings for the same reason the line boxes are: a
+   * half-typed "12." must not read as twelve, and an empty box must not read as
+   * zero — `setInvoiceDims` treats all four blank as "un-measure this", which is
+   * the way back for a parcel that was repacked.
+   */
+  const dimStr = (v: number | null): string => (v == null ? '' : String(v))
+  const [weightLb, setWeightLb] = useState(dimStr(invoice.weightLb))
+  const [lengthIn, setLengthIn] = useState(dimStr(invoice.lengthIn))
+  const [widthIn, setWidthIn] = useState(dimStr(invoice.widthIn))
+  const [heightIn, setHeightIn] = useState(dimStr(invoice.heightIn))
+  const [booking, setBooking] = useState(false)
+  /**
+   * WHEN THIS BUYER PAYS, and the one control on this screen that saves ITSELF.
+   *
+   * Every other field here waits for Save because they are all one document —
+   * change three line prices and one press commits the lot. The terms are not
+   * part of that document: they gate whether the packing floor may touch the
+   * order, so leaving them staged behind a Save somebody might cancel would mean
+   * the screen showed one answer while the gate used another.
+   *
+   * Held in state as well so the boxes tick instantly rather than after a round
+   * trip, and reconciled from the saved order when it comes back.
+   */
+  const [timing, setTiming] = useState<PaymentTiming | null>(invoice.paymentTiming ?? null)
+  const [timingBusy, setTimingBusy] = useState(false)
 
   const storedDraft = (l: InvoiceLine): Draft => ({
     parts: [
@@ -189,13 +253,97 @@ export function EditOrderModal({
     return num(d.parts[0].quantity) !== l.quantity
   })
 
+  /**
+   * THE MEASUREMENTS, and the one rule they have.
+   *
+   * All four or none. `hasDims` reads a partial set as unmeasured because a
+   * carrier prices a case on dimensional weight, so three of the four buys
+   * nothing — and a screen that let somebody save three would leave them
+   * believing the parcel was done. The same rule DimsModal keeps; this is a
+   * second door onto one whole-set overwrite, not a second half of it.
+   */
+  const dimNum = (v: string): number | null => {
+    const n = parseFloat(v)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+  const dimFields = [weightLb, lengthIn, widthIn, heightIn]
+  const dimsFilled = dimFields.filter((v) => dimNum(v) !== null).length
+  const dimsChanged =
+    dimNum(weightLb) !== invoice.weightLb ||
+    dimNum(lengthIn) !== invoice.lengthIn ||
+    dimNum(widthIn) !== invoice.widthIn ||
+    dimNum(heightIn) !== invoice.heightIn
+  /**
+   * A PART-MEASURED PARCEL IS A NOTE, NOT A REFUSAL — and the first draft of
+   * this screen got it wrong in the way that mattered most.
+   *
+   * It pushed the completeness rule into `problems`, which gates the footer for
+   * the WHOLE screen. So an incomplete parcel disabled Save for the LINES too,
+   * and because these boxes are seeded from what is stored, an order already
+   * carrying a partial measurement — which DimsModal is perfectly happy to
+   * write — opened here reading "Fix the boxes above" before anybody had typed
+   * a character, with no way to correct a price.
+   *
+   * The comment above it claimed "the same rule DimsModal keeps". DimsModal
+   * keeps no such rule: its Save is never disabled, `setInvoiceDims` stores
+   * whatever is non-null, and its own helper text describes the incomplete save
+   * as a supported outcome — the order simply stays in Awaiting dims. Refusing
+   * here meant the app wrote a state through one door and then would not open
+   * the other.
+   */
+  const dimsComplete = dimsFilled === 4
+
   const gapNow = qboTotalMismatch(invoice)
   const gapAfter = qboTotalMismatch({ ...invoice, total: newTotal })
 
+  const saveTiming = async (next: PaymentTiming | null): Promise<void> => {
+    const was = timing
+    setTiming(next)
+    setTimingBusy(true)
+    try {
+      const res = await api.invoices.setPaymentTiming(invoice.id, next)
+      if (!res.ok || !res.data) {
+        setTiming(was)
+        toast.error(res.error ?? 'Could not change the terms.')
+        return
+      }
+      setTiming(res.data.paymentTiming ?? null)
+      await onDone()
+    } finally {
+      setTimingBusy(false)
+    }
+  }
+
+  /** Anything at all to save. Lines or the parcel — either alone is enough. */
+  const touched = changedLines.length > 0 || dimsChanged
+
   const save = async (): Promise<void> => {
-    if (changedLines.length === 0 || problems.length > 0) return
+    if (!touched || problems.length > 0) return
     setBusy(true)
     try {
+      // THE PARCEL FIRST, and only when it moved. It is the write with no
+      // consequences beyond its own four columns, so getting it in before the
+      // one that re-derives stock means a failure on the lines cannot leave a
+      // measurement half-applied. An untouched parcel is not written at all —
+      // sending it would stamp the order for nothing.
+      if (dimsChanged) {
+        const dims = await api.invoices.setDims(invoice.id, {
+          weightLb: dimNum(weightLb),
+          lengthIn: dimNum(lengthIn),
+          widthIn: dimNum(widthIn),
+          heightIn: dimNum(heightIn)
+        })
+        if (!dims.ok) {
+          toast.error(dims.error ?? 'Could not save the measurements.')
+          return
+        }
+      }
+      if (changedLines.length === 0) {
+        toast.success('Measurements saved.')
+        await onDone()
+        onClose()
+        return
+      }
       const res = await api.invoices.setLines(
         invoice.id,
         changedLines.map((l) => {
@@ -252,8 +400,30 @@ export function EditOrderModal({
   return (
     <Modal
       title="Edit this order"
-      subtitle={`${invoice.invoiceNumber ? `Sales order ${invoice.invoiceNumber}` : 'This sales order'} — your copy only`}
+      subtitle={`${invoice.invoiceNumber ? `Sales order ${invoice.invoiceNumber}` : 'This sales order'}${
+        invoice.status === 'draft' ? ' — still a draft' : ' — your copy only'
+      }`}
       onClose={onClose}
+      wide
+      /* THE SAME WIDTH AS THE FORM THAT WROTE THE ORDER.
+
+         The owner, on a screenshot of this dialog on his own machine: "I think
+         it needs to be like more horiztonal when I click on it". At the default
+         520px the five-column line table did not fit — the Line total header was
+         clipped mid-word and the table grew its own horizontal scrollbar — and
+         then the four measurement boxes stacked underneath it into a tall
+         column. This screen stopped being a column of fields the moment it grew
+         a table and a measurement row, which is exactly the reason
+         CreateInvoiceModal states for taking modal-xl.
+
+         modal-xl's fixed 940px stopped the clipping and was still a window in
+         the middle of a screen; asked again, the owner wanted it LARGER. So this
+         screen takes the viewport rather than a fixed number — see
+         .modal-edit-order, which is 94vw up to a cap.
+
+         The phone layer sizes .modal to the whole screen and wins on source
+         order, so this is a desktop width and cannot reach a phone. */
+      className="modal-edit-order"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -262,15 +432,17 @@ export function EditOrderModal({
           <Button
             variant="primary"
             icon="Check"
-            disabled={changedLines.length === 0 || problems.length > 0 || busy}
+            disabled={!touched || problems.length > 0 || busy}
             loading={busy}
             onClick={() => void save()}
           >
             {problems.length > 0
               ? 'Fix the boxes above'
-              : changedLines.length === 0
+              : !touched
                 ? 'Nothing changed'
-                : `Save — total ${formatMoney(newTotal)}`}
+                : changedLines.length === 0
+                  ? 'Save the measurements'
+                  : `Save — total ${formatMoney(newTotal)}`}
           </Button>
         </>
       }
@@ -499,6 +671,166 @@ export function EditOrderModal({
             {splitting ? ', with the lines split the same way.' : '.'}
           </span>
         </p>
+      )}
+
+      {/* WHEN THIS BUYER PAYS.
+          
+          The owner: "in the edit sales order section can you go ahead and let me
+          change the payment options like on delivery or upon delivery."
+          
+          It could only be set on the create form, which is refused the moment an
+          invoice posts — so an order written before the terms were agreed said
+          "Terms not set" for ever, and one entered wrong could never be put
+          right. It is an intention about a deal, not a fact the document fixes.
+          
+          SAVES ON THE TICK, unlike everything else here. See the note on the
+          state above: these gate what the packing floor may do, so they must not
+          sit staged behind a Save somebody might cancel. */}
+      <div className="so-edit-section">
+        <h4>When they pay</h4>
+        <p className="p-sub">
+          Nothing ships on an up-front order until the money is in, unless somebody sends it
+          anyway. Untick both if nobody has said yet.
+        </p>
+        <div className="freight-payment-boxes">
+          {PAYMENT_TIMINGS.map((pt) => (
+            <Checkbox
+              key={pt.id}
+              checked={timing === pt.id}
+              label={pt.label}
+              hint={pt.hint}
+              disabled={timingBusy || busy}
+              onChange={() => void saveTiming(togglePayment(timing, pt.id))}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* THE PARCEL. Never on this screen before, and only enterable once
+          anywhere else: the fulfilment tick offers "Measure" while an order is
+          waiting for it, and the moment it is measured the tick goes. A weight
+          typed wrong was therefore unfixable from the board, though the backend
+          would have taken the correction all along. Saved by the same whole-set
+          overwrite, so a second door cannot half-apply what the first stored. */}
+      <div className="so-edit-section">
+        <h4>Box and weight</h4>
+        <p className="p-sub">
+          What the carrier prices on. All four or none — leave them all empty to un-measure a parcel
+          that has been repacked.
+        </p>
+        {/* The same sentence DimsModal ends on, for the same reason: a partial
+            answer looks saved and does nothing, and the card keeps its amber
+            chip with numbers printed under it. */}
+        {dimsFilled > 0 && !dimsComplete && (
+          <p className="sync-note">
+            A carrier prices on all four, so this order stays in <b>Awaiting dims</b> until every box
+            has a number. Clearing them all is how a repacked parcel gets measured again.
+          </p>
+        )}
+        <div className="so-dims-grid">
+          <Field label="Weight (lb)">
+            <Input
+              value={weightLb}
+              inputMode="decimal"
+              placeholder="0"
+              onChange={(e) => setWeightLb(e.target.value)}
+            />
+          </Field>
+          <Field label="Length (in)">
+            <Input
+              value={lengthIn}
+              inputMode="decimal"
+              placeholder="0"
+              onChange={(e) => setLengthIn(e.target.value)}
+            />
+          </Field>
+          <Field label="Width (in)">
+            <Input
+              value={widthIn}
+              inputMode="decimal"
+              placeholder="0"
+              onChange={(e) => setWidthIn(e.target.value)}
+            />
+          </Field>
+          <Field label="Height (in)">
+            <Input
+              value={heightIn}
+              inputMode="decimal"
+              placeholder="0"
+              onChange={(e) => setHeightIn(e.target.value)}
+            />
+          </Field>
+        </div>
+      </div>
+
+      {/* THE REST OF THE ORDER, handed off rather than absorbed. See the header:
+          each of these has its own save and its own consequences, and folding
+          them into this screen's one press would make the ORDER of two writes
+          decide whether somebody's per-case sourcing survives.
+
+          They are here because they used to be three more buttons on a card that
+          had nine. Edit is the screen you open to change this order, so this is
+          where the things that change it belong — one press further away than
+          before, and off a card that is now readable. */}
+      {(onRoute || onAttachPo || onBookStock) && (
+        <div className="so-edit-section">
+          <h4>The rest of this order</h4>
+          <div className="so-edit-links">
+            {onRoute && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  onClose()
+                  onRoute()
+                }}
+              >
+                <Icon name="Route" size={14} />
+                Where these come from…
+              </button>
+            )}
+            {onAttachPo && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  onClose()
+                  onAttachPo()
+                }}
+              >
+                <Icon name="Link" size={14} />
+                {invoice.sourcePoCount === 0
+                  ? 'Attach a purchase order…'
+                  : invoice.sourcePoCount === 1
+                    ? 'Purchase order · 1'
+                    : `Purchase orders · ${invoice.sourcePoCount}`}
+              </button>
+            )}
+            {/* NOT A HAND-OFF — there is no screen behind it, only a write. It
+                stays on this one and reports what it did, because the whole
+                point of it is an order whose stock ledger is empty and where
+                "nothing was booked" is a different answer from "done". */}
+            {onBookStock && invoice.status !== 'draft' && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={booking || busy}
+                title="Take the stock for this order against today's shelf — for an order sold before its goods arrived"
+                onClick={async () => {
+                  setBooking(true)
+                  try {
+                    await onBookStock()
+                  } finally {
+                    setBooking(false)
+                  }
+                }}
+              >
+                <Icon name="PackageCheck" size={14} />
+                {booking ? 'Booking…' : 'Take the stock again'}
+              </button>
+            )}
+          </div>
+        </div>
       )}
     </Modal>
   )

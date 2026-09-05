@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import type { Carrier, PaymentTiming } from '@shared/freight'
 import { carrierLabel } from '@shared/freight'
@@ -32,6 +32,8 @@ import { Button, Checkbox, Field, Input, Modal, Select } from '../../components/
 import { Icon } from '../../components/Icon'
 import { SALES_QTY_FLOOR, canStep, stepDownBlockedReason, stepQty } from '@shared/lineQty'
 import { formatDate, formatMoney } from '../../lib/format'
+import { describeLineSources, sourceName, sourceWhere } from '@shared/lineSources'
+import type { LineSources } from '@shared/lineSources'
 import { FreightFields } from '../../components/FreightFields'
 import { PaymentBar } from '../../components/PaymentProgress'
 import { OrderHistory } from '../orders/OrderHistory'
@@ -45,6 +47,7 @@ import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
 import { SourceOrderPicker } from './SourceOrderPicker'
 import { StockOnHand } from './StockOnHand'
 import { PickSourceModal } from './PickSourceModal'
+import type { ShelfSlice } from '@shared/pickSource'
 import { CustomerTypeahead } from './CustomerTypeahead'
 import { QboReadiness } from './QboReadiness'
 import { InvoiceStatusChip, formatDay } from './helpers'
@@ -126,6 +129,14 @@ interface DraftLine {
    * the week with that shop be costed against its own cases.
    */
   sourcePoId: string
+  /**
+   * THE LINE'S UNITS SPREAD ACROSS SHELVES, when somebody spread them.
+   *
+   * Empty on almost every line, which is the whole back-compat mechanism: no
+   * rows means one implicit slice of the whole quantity at `destination`, which
+   * is exactly what a line has always meant. See @shared/invoiceAllocations.
+   */
+  allocations: ShelfSlice[]
 }
 
 function today(): string {
@@ -276,7 +287,8 @@ export function CreateInvoiceModal({
         // A prefill comes from a DROPSHIP purchase, which is the other kind of
         // link entirely — those units never touched a shelf, so there is no
         // order's cases to sell out of.
-        sourcePoId: ''
+        sourcePoId: '',
+        allocations: []
       }))
     }
     return (invoice?.lines ?? []).map((l) => ({
@@ -297,7 +309,8 @@ export function CreateInvoiceModal({
       supplier: l.supplier ?? '',
       // Read back so reopening an order shows which cases it sold, and re-saving
       // it does not quietly turn them into ordinary stock.
-      sourcePoId: l.sourcePoId ?? ''
+      sourcePoId: l.sourcePoId ?? '',
+      allocations: []
     }))
   })
   const [error, setError] = useState('')
@@ -390,13 +403,23 @@ export function CreateInvoiceModal({
    */
   const [picking, setPicking] = useState<InventoryProduct | null>(null)
 
-  const addLine = (p: InventoryProduct, choice?: { quantity: number; location: string }): void => {
+  const addLine = (
+    p: InventoryProduct,
+    choice?: { quantity: number; location: string; allocations?: ShelfSlice[] }
+  ): void => {
     const wanted = Math.max(1, Math.round(choice?.quantity ?? 1))
     const where = choice?.location ?? ''
+    const split = choice?.allocations ?? []
     setLines((prev) => {
       // Only a real id counts as "already here". Saved lines carry an empty one
       // and would otherwise all collapse onto whichever was picked first.
-      const mergeInto = stockLineForProduct(prev, p.id ?? '', location)
+      //
+      // A SPLIT IS NEVER MERGED INTO AN EXISTING LINE. Merging adds to the
+      // quantity, and the shelves the operator just chose would go with the
+      // discarded half — the line would claim more units than its slices place.
+      // Two lines of the same product is already legal here, and a second line
+      // saying what it says is better than one line quietly saying less.
+      const mergeInto = split.length > 0 ? null : stockLineForProduct(prev, p.id ?? '', location)
       if (mergeInto) {
         return prev.map((l) =>
           l.key === mergeInto.key
@@ -428,7 +451,8 @@ export function CreateInvoiceModal({
           supplier: '',
           // ORDINARY STOCK until somebody says otherwise. A line that names no
           // order walks FIFO exactly as every sale always has.
-          sourcePoId: ''
+          sourcePoId: '',
+          allocations: split
         })
       ]
     })
@@ -515,7 +539,10 @@ export function CreateInvoiceModal({
         // A supplier the operator already typed on a saved line is kept — it may
         // name a party the destination does not, on a line entered before this
         // column went away.
-        supplier: shipsItself ? null : l.supplier || from
+        supplier: shipsItself ? null : l.supplier || from,
+        // Empty on an ordinary line, so `saveInvoice` writes no allocation rows
+        // and the sale behaves byte for byte as it did before splitting existed.
+        allocations: l.allocations.map((a) => ({ location: a.location, quantity: a.quantity }))
       }
     })
   })
@@ -1262,6 +1289,131 @@ function InvoiceHead({
  * lookalike — the grid that lines those five columns up lives in `.po-receipt-*`
  * and a second copy of it would drift the first time a column moved.
  */
+/**
+ * What POSTING this sale cost us, corrected on the document itself.
+ *
+ * ## Why it has to be editable here
+ *
+ * It was reachable from exactly one place — the invoice form — and that form is
+ * refused the moment an order posts, correctly: this app is not the system of
+ * record for a document a buyer has been billed against. But postage is bought
+ * when the PARCEL goes, which is always after that. So the one cost on a sales
+ * order that cannot be known at draft time was the one cost only a draft could
+ * record, and every real postage figure had nowhere to land.
+ *
+ * ## Why it is safe where a line edit is not
+ *
+ * This is not on the buyer's invoice. It is deliberately absent from the order
+ * total and never sent to Intuit, so unlike a price correction it cannot leave
+ * our copy of a posted document disagreeing with QuickBooks' — which is the
+ * whole reason EditOrderModal has to announce itself. Nothing here touches a
+ * line, a stock move or a cost lot.
+ *
+ * ## Empty is not zero
+ *
+ * With nothing typed the per-parcel label costs answer instead, so the box says
+ * so rather than showing $0.00 — see orderShippingCost, where a typed figure
+ * wins and the parcels are the fallback. Printing a zero here would be this
+ * screen quietly asserting that a parcel went for free.
+ */
+function SalePostageEditor({ invoice }: { invoice: InvoiceDetail }): JSX.Element | null {
+  const toast = useToast()
+  const [saved, setSaved] = useState<number | null>(invoice.shippingCost ?? null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(invoice.shippingCost != null ? String(invoice.shippingCost) : '')
+  const [busy, setBusy] = useState(false)
+
+  // A void order keeps whatever was recorded and offers no way to move it —
+  // the repository refuses, and a button that is always refused is worse than
+  // no button. Absent entirely when there is also nothing to show.
+  const editable = invoice.status !== 'void'
+  if (!editable && saved === null) return null
+
+  const save = async (): Promise<void> => {
+    const raw = draft.trim()
+    const next = raw === '' ? null : Number(raw)
+    if (next !== null && (!Number.isFinite(next) || next < 0)) {
+      toast.error('Postage has to be a number, and not a negative one.')
+      return
+    }
+    if (next === saved) {
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await api.invoices.setShippingCost(invoice.id, next)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not save the postage cost.')
+        return
+      }
+      setSaved(res.data.shippingCost ?? null)
+      setEditing(false)
+      toast.success(next === null ? 'Postage cost cleared.' : 'Postage cost saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={`po-money-row po-money-ship so-postage${editing ? ' is-editing' : ''}`}>
+      <span>
+        Postage cost
+        {/* Said every time, not on hover. This figure sitting under a grand
+            total is exactly the place somebody could mistake a cost for a
+            charge, and the sentence that prevents it costs one line. */}
+        <em className="so-postage-note">what it cost us — not billed to the buyer</em>
+      </span>
+      {editing ? (
+        <div className="po-ship-form">
+          <Input
+            value={draft}
+            inputMode="decimal"
+            placeholder="0.00"
+            aria-label="Postage cost"
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void save()
+              if (e.key === 'Escape') {
+                setDraft(saved != null ? String(saved) : '')
+                setEditing(false)
+              }
+            }}
+          />
+          <Button variant="primary" loading={busy} onClick={() => void save()}>
+            Save
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setDraft(saved != null ? String(saved) : '')
+              setEditing(false)
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : editable ? (
+        <button
+          type="button"
+          className={`po-ship-edit${saved === null ? ' is-empty' : ''}`}
+          title="Click to record what postage cost"
+          onClick={() => {
+            setDraft(saved != null ? String(saved) : '')
+            setEditing(true)
+          }}
+        >
+          <span className="mono">{saved === null ? 'From parcel labels' : formatMoney(saved)}</span>
+          <Icon name="Pencil" size={11} />
+        </button>
+      ) : (
+        <span className="mono">{formatMoney(saved ?? 0)}</span>
+      )}
+    </div>
+  )
+}
+
 function InvoiceReceipt({
   invoice,
   thumbnails
@@ -1269,6 +1421,25 @@ function InvoiceReceipt({
   invoice: InvoiceDetail
   thumbnails: Record<string, string>
 }): JSX.Element {
+  // WHERE EACH LINE'S UNITS CAME FROM, fetched once for the whole order rather
+  // than per line: one query answers every row, and a fetch per line on an order
+  // with twenty of them is twenty round trips for one popover nobody may open.
+  // A failure degrades to no hover at all, which is the honest outcome — an
+  // empty popover would claim the line drew nothing.
+  const [sources, setSources] = useState<Map<number, LineSources>>(new Map())
+  useEffect(() => {
+    let live = true
+    void api.invoices
+      .lineSources(invoice.id)
+      .then((rows) => {
+        if (live) setSources(new Map(rows.map((r) => [r.position, r])))
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [invoice.id])
+
   const shipsWith = [carrierLabel(invoice.carrier), invoice.service].filter(Boolean).join(' · ')
   // The buyer on a stock sale, the supplier on a dropship — see labelRecipientFor
   // for why the buyer is not the fallback when a dropship's supplier is unknown.
@@ -1396,13 +1567,28 @@ function InvoiceReceipt({
           <span className="po-rl-total">Amount</span>
         </div>
         {invoice.lines.map((line) => (
-          <ReceiptLine key={line.id} line={line} thumbnails={thumbnails} />
+          <ReceiptLine
+            key={line.id}
+            line={line}
+            thumbnails={thumbnails}
+            sources={sources.get(line.position)}
+          />
         ))}
       </div>
 
-      <div className="po-grand-total">
-        <span>Grand total</span>
-        <span className="mono">{formatMoney(invoice.total)}</span>
+      <div className="po-money">
+        <div className="po-grand-total">
+          <span>Grand total</span>
+          <span className="mono">{formatMoney(invoice.total)}</span>
+        </div>
+        {/* BELOW the total, and outside it, because that is what it is.
+            On a purchase order freight joins the total — the supplier is
+            charging us for it. On a sale it is the opposite: postage is a cost
+            WE carry, it is not on the buyer's invoice and it never goes to
+            QuickBooks. Putting it in the same stack as the items, the way the
+            buy-side receipt does, would read as a line the buyer is paying,
+            which is the one thing this figure must never look like. */}
+        <SalePostageEditor invoice={invoice} />
       </div>
 
       {/* The same three panels the buy side carries, in the same order and at
@@ -1474,10 +1660,13 @@ function TimeRow({
 
 function ReceiptLine({
   line,
-  thumbnails
+  thumbnails,
+  sources
 }: {
   line: InvoiceLine
   thumbnails: Record<string, string>
+  /** Which cost layers this line drew, if it drew any. */
+  sources?: LineSources
 }): JSX.Element {
   const thumb = line.productId ? thumbnails[line.productId] : undefined
 
@@ -1495,9 +1684,52 @@ function ReceiptLine({
         {line.sku && <span className="po-rl-sku mono">{line.sku}</span>}
         {line.description && <span className="po-line-sub">{line.description}</span>}
       </span>
-      <span className="po-rl-qty">{line.quantity}</span>
+      {/* THE QUANTITY IS THE HANDLE, because it is the number somebody is
+          questioning: "three cases — three cases of what, from where?".
+          A button rather than a hovered span so it answers to the keyboard and
+          to a finger as well as to a mouse; the popover shows on hover AND on
+          focus, in CSS, so nothing here depends on a pointer existing. */}
+      <span className="po-rl-qty">
+        {sources ? (
+          <button type="button" className="src-handle" aria-label={`Where these ${line.quantity} came from`}>
+            {line.quantity}
+            <LineSourcePop sources={sources} />
+          </button>
+        ) : (
+          line.quantity
+        )}
+      </span>
       <span className="po-rl-price mono">{formatMoney(line.rate)}</span>
       <span className="po-rl-total mono">{formatMoney(line.amount)}</span>
     </div>
+  )
+}
+
+/**
+ * Where one line's units came from.
+ *
+ * Rendered ALWAYS and revealed by CSS rather than mounted on hover: a popover
+ * that mounts on mouseover flickers when the pointer crosses its own edge, and
+ * the amount of markup here is trivial next to the shipping panels already on
+ * this screen.
+ */
+function LineSourcePop({ sources }: { sources: LineSources }): JSX.Element {
+  return (
+    <span className="src-pop" role="tooltip">
+      <span className="src-pop-head">{describeLineSources(sources)}</span>
+      {sources.sources.map((s, i) => (
+        <span className="src-pop-row" key={`${s.poId ?? 'none'}-${i}`}>
+          <span className="src-pop-name">{sourceName(s)}</span>
+          <span className="src-pop-meta mono">
+            {s.quantity} @ {formatMoney(s.unitCost)}
+          </span>
+          {/* Where it sat, whether it was chosen, and WHO IT CAME FROM —
+              assembled by sourceWhere so the three cannot drift apart. The
+              vendor used to be printed only when there was no purchase order,
+              which hid it in the commonest case; see sourceVendor. */}
+          <span className="src-pop-where">{sourceWhere(s)}</span>
+        </span>
+      ))}
+    </span>
   )
 }

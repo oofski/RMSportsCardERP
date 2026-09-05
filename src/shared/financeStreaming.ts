@@ -768,6 +768,96 @@ export interface LedgerImport {
   createdBy: string | null
 }
 
+/**
+ * WHERE THE IMPORTS STAND, in the few facts a person acts on.
+ *
+ * The uploading and the import history moved off the Streaming tab and into
+ * Admin, on the owner's ask: "when the ledger gets uploaded and data is there I
+ * just want it to be there ... it should be just sent there and not in the
+ * streaming tab". Streaming is now about the money.
+ *
+ * But a screen that reports revenue must never go quiet about a reason its
+ * revenue might be wrong. So Streaming keeps one line, and this is what both
+ * that line and the Admin tile are built from — ONE function, so the two can
+ * never describe the same imports differently. A pointer saying everything is
+ * fine while the tile it points at says four rows could not be read is worse
+ * than having no pointer at all.
+ *
+ * `needsAttention` is the whole point of the type. It is deliberately NOT "are
+ * there any imports" or "is anything unusual": it is the narrow question of
+ * whether a human has something to do, so that the quiet state stays genuinely
+ * quiet and the loud one is believed when it comes.
+ */
+export interface ImportStanding {
+  importCount: number
+  /** The newest upload's timestamp, for the caller to format. */
+  lastImportAt: string | null
+  lastFilename: string | null
+  /** Rows that actually landed, across every import. */
+  rowsImported: number
+  /**
+   * Rows no parser could read, kept verbatim rather than dropped.
+   *
+   * The one figure here that is unambiguously money missing from the P&L, which
+   * is why it alone can raise `needsAttention` on an otherwise healthy import.
+   */
+  quarantined: number
+  /** Imports carrying a warning worth reading. */
+  withWarnings: number
+  needsAttention: boolean
+}
+
+export function importStanding(imports: readonly LedgerImport[]): ImportStanding {
+  const list = [...(imports ?? [])].sort((a, b) =>
+    String(a.createdAt) < String(b.createdAt) ? 1 : -1
+  )
+  const newest = list[0] ?? null
+  let rowsImported = 0
+  let quarantined = 0
+  let withWarnings = 0
+  for (const i of list) {
+    rowsImported += Number(i.rowsImported) || 0
+    quarantined += Number(i.rowsQuarantined) || 0
+    if ((i.warnings?.length ?? 0) > 0) withWarnings += 1
+  }
+  return {
+    importCount: list.length,
+    lastImportAt: newest?.createdAt ?? null,
+    lastFilename: newest?.filename ?? null,
+    rowsImported,
+    quarantined,
+    withWarnings,
+    needsAttention: quarantined > 0 || withWarnings > 0
+  }
+}
+
+/**
+ * The standing as one sentence, with no date in it.
+ *
+ * The date is left to the caller because the two screens format it differently
+ * — one wants "12 Aug", the other a full instant — and a sentence carrying a
+ * pre-formatted date would force one of them to take the other's.
+ */
+export function describeImportStanding(s: ImportStanding): string {
+  if (s.importCount === 0) return 'No ledger has been uploaded yet'
+  const parts = [
+    `${s.importCount.toLocaleString()} ${s.importCount === 1 ? 'upload' : 'uploads'}`,
+    `${s.rowsImported.toLocaleString()} ${s.rowsImported === 1 ? 'row' : 'rows'}`
+  ]
+  // Named separately rather than folded into the row count: these are rows that
+  // did NOT land, and adding them to a total of rows that did is how a number
+  // stops meaning anything.
+  if (s.quarantined > 0) {
+    parts.push(
+      `${s.quarantined.toLocaleString()} ${s.quarantined === 1 ? 'row' : 'rows'} could not be read`
+    )
+  }
+  if (s.withWarnings > 0) {
+    parts.push(`${s.withWarnings} with warnings`)
+  }
+  return parts.join(' · ')
+}
+
 /** A row that could not be parsed at all. Kept verbatim — never dropped, because
  *  a silently missing row is money that vanished with no trace. */
 export interface LedgerQuarantine {
@@ -1104,6 +1194,43 @@ export function itemPriceFromPayout(payoutCents: number, rates: WhatnotFeeRates)
 // ---------------------------------------------------------------------------
 
 /**
+ * WHAT A SET OF TERMS APPLIES TO, when it does not apply to everything.
+ *
+ * Whatnot does not charge one commission. The rate depends on what was sold,
+ * and this app resolved it by DATE alone — one rate for every row on a night —
+ * so any night mixing break spots and sealed product was priced wrong on some
+ * of them by construction. Because gross is derived from net by adding the
+ * modelled fee back, that error lands entirely on REVENUE and never on the
+ * bottom line, which is how it survived: net profit looked right while the top
+ * line ran high.
+ *
+ * ## Why these two and not a category list
+ *
+ * Because these two are the split the app already resolves for free and
+ * reliably. `classifyLedgerRow` separates break spots from whole products on
+ * the message text, and `tests/marketplace.test.ts` pins that split against
+ * 9,225 rows of real ledger including the typos. A category taxonomy would be
+ * a second thing to maintain and a guess until a statement proves it; this is
+ * evidence the app is already holding.
+ *
+ * `all` is what every existing period means and what a new one means unless
+ * somebody says otherwise, so adding this changes no stored figure.
+ */
+export type RateScope = 'all' | 'break_spots' | 'whole_products'
+
+/** What a ledger bucket is priced as. Anything not a sale is never priced. */
+export function scopeForBucket(bucket: string): RateScope {
+  if (bucket === 'product_sale') return 'whole_products'
+  return 'break_spots'
+}
+
+export const RATE_SCOPES: ReadonlyArray<{ key: RateScope; label: string; hint: string }> = [
+  { key: 'all', label: 'Everything', hint: 'Break spots and whole products alike.' },
+  { key: 'break_spots', label: 'Break spots', hint: 'Spots sold out of a break.' },
+  { key: 'whole_products', label: 'Whole products', hint: 'Sealed boxes and cases sold outright.' }
+]
+
+/**
  * A stretch of SHOWS priced on some particular set of terms.
  *
  * SHOWS, NOT CALENDAR DAYS, and the distinction is the whole of it: both dates
@@ -1131,6 +1258,15 @@ export interface WhatnotRatePeriod {
   processingRate: number
   /** The card flat charge per order, in CENTS. */
   processingFlatCents: number
+  /**
+   * What these terms apply to. `all` unless somebody narrowed it.
+   *
+   * A scoped period may share dates with an `all` period — see
+   * `coveringRatePeriod`, which prefers the narrower one. That is what lets
+   * somebody say "8% generally, 4% on sealed product" without carving the
+   * calendar into pieces to express it.
+   */
+  scope: RateScope
   /** Why these terms, in the operator's words. */
   note: string
   createdAt: string
@@ -1150,23 +1286,52 @@ export function isDayKey(value: string): boolean {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
 }
 
+/** Dates only. Whether the SCOPE also applies is `ratePeriodApplies`. */
 export function ratePeriodCovers(period: WhatnotRatePeriod, day: string): boolean {
   return day >= period.fromDate && day <= (period.toDate ?? OPEN_ENDED)
 }
 
 /**
+ * Dates AND scope. An `all` period applies to anything; a scoped one only to
+ * its own kind.
+ */
+export function ratePeriodApplies(
+  period: WhatnotRatePeriod,
+  day: string,
+  scope: RateScope = 'all'
+): boolean {
+  if (!ratePeriodCovers(period, day)) return false
+  const s = period.scope ?? 'all'
+  return s === 'all' || s === scope
+}
+
+/**
  * The period that owns a day, or null when the defaults apply.
  *
- * A plain linear scan. It stops at the FIRST match because a day cannot be
- * covered twice — that is enforced at the point of writing, and it is the whole
- * reason this function needs no tie-breaker.
+ * THE NARROWER PERIOD WINS, and this function does now need that tie-breaker
+ * where it once did not. Before scopes a day could not be covered twice and a
+ * first match was the only match; now "8% on everything" and "4% on sealed
+ * product" are two periods deliberately sharing the same dates, and taking
+ * whichever the scan met first would make the answer depend on row order in a
+ * table.
+ *
+ * Specific beats general because that is the only reading that lets somebody
+ * state an exception without carving the calendar around it. Two periods of the
+ * SAME scope still cannot overlap — that remains refused on save, and it is
+ * what keeps this a choice between at most two candidates.
  */
 export function coveringRatePeriod(
   periods: readonly WhatnotRatePeriod[],
-  day: string
+  day: string,
+  scope: RateScope = 'all'
 ): WhatnotRatePeriod | null {
-  for (const p of periods) if (ratePeriodCovers(p, day)) return p
-  return null
+  let general: WhatnotRatePeriod | null = null
+  for (const p of periods) {
+    if (!ratePeriodApplies(p, day, scope)) continue
+    if ((p.scope ?? 'all') !== 'all') return p
+    if (general === null) general = p
+  }
+  return general
 }
 
 /**
@@ -1186,9 +1351,10 @@ export function coveringRatePeriod(
  */
 export function effectiveFeeRates(
   periods: readonly WhatnotRatePeriod[],
-  day: string
+  day: string,
+  scope: RateScope = 'all'
 ): WhatnotFeeRates {
-  const p = coveringRatePeriod(periods, day)
+  const p = coveringRatePeriod(periods, day, scope)
   if (!p) return DEFAULT_FEE_RATES
   return resolveFeeRates({
     commissionRate: p.rate,
@@ -1211,17 +1377,32 @@ export function effectiveFeeRates(
  * itself the answer: read it top to bottom and every day has exactly one set of
  * terms or the defaults, with no arbitration happening in anyone's head.
  *
+ * ## WITHIN A SCOPE. Across scopes, sharing dates is the point.
+ *
+ * "8% on everything" and "4% on sealed product" are two periods deliberately
+ * covering the same nights, and refusing that would force somebody to express
+ * an exception by carving the calendar around it — which is unreadable and
+ * wrong the moment either date moves. So the refusal narrowed to what it was
+ * always actually about: TWO PERIODS THAT COULD BOTH PRICE THE SAME ROW.
+ *
+ * Two periods of the same scope still cannot overlap, and neither can two
+ * `all` periods. What is now allowed is exactly the case `coveringRatePeriod`
+ * has a stated rule for, so the list remains the answer: read it, and every row
+ * has one set of terms — the narrowest one that names it.
+ *
  * `ignoreId` is the row being edited — a period always overlaps itself.
  */
 export function overlappingRatePeriod(
   periods: readonly WhatnotRatePeriod[],
-  candidate: { fromDate: string; toDate: string | null },
+  candidate: { fromDate: string; toDate: string | null; scope?: RateScope },
   ignoreId?: string
 ): WhatnotRatePeriod | null {
   const from = candidate.fromDate
   const to = candidate.toDate ?? OPEN_ENDED
+  const scope = candidate.scope ?? 'all'
   for (const p of periods) {
     if (ignoreId && p.id === ignoreId) continue
+    if ((p.scope ?? 'all') !== scope) continue
     if (from <= (p.toDate ?? OPEN_ENDED) && to >= p.fromDate) return p
   }
   return null
@@ -1237,6 +1418,8 @@ export interface RatePeriodInput {
   processingRate: number
   /** CENTS. 30, not 0.30 — money in this app is integer cents. */
   processingFlatCents: number
+  /** What these terms apply to. Absent means everything. */
+  scope?: RateScope
   note: string
 }
 
@@ -1273,6 +1456,13 @@ export function validateRatePeriod(input: RatePeriodInput): string | null {
           `Enter it in cents — 30, not 0.30.`
     }
     return null
+  }
+
+  // An unknown scope is refused rather than coerced to 'all'. Quietly widening
+  // a period somebody meant to narrow would price rows it was never meant to
+  // touch, and the row would look correct in the list afterwards.
+  if (input.scope !== undefined && !RATE_SCOPES.some((s) => s.key === input.scope)) {
+    return 'That is not something a rate can apply to.'
   }
 
   const bad =
@@ -2597,105 +2787,78 @@ export function buildPnl(d: {
       running: true
     },
     {
+      // ONE SECTION FOR EVERYTHING THE PLATFORM TOOK, matching what its own
+      // month-end summary prints under "Fees & costs" — commission, payment
+      // processing, seller paid shipping and handling, shipping surcharges,
+      // order refunds and its other adjustments.
+      //
+      // These were four sections: Platform fees, Shipping, Other show costs and
+      // Adjustments. Every one of them is money Whatnot took and wrote into the
+      // export, and split four ways there was no figure anywhere in this app
+      // that could be put beside the total on the document. The owner, sending
+      // that document over: "everything under fees should be under the fees."
+      //
+      // NOTHING IS COUNTED TWICE, which is the whole risk of this change: four
+      // subtotals became one subtotal over the same eight lines, so
+      // `pnlChecksum` sums to the same figure and NET PROFIT DOES NOT MOVE BY A
+      // CENT. A test asserts exactly that, at every grain.
+      //
+      // GENERAL EXPENSES STAYS OUT, in the section below. Everything here is a
+      // charge Whatnot levied, so this subtotal can be checked against a Whatnot
+      // screen line for line. That is money somebody typed. Folding them
+      // together would produce one figure that is half auditable and half not —
+      // and the half that is not is precisely the half a reader wants flagged.
       key: 'fees',
-      label: 'Platform fees',
+      label: 'Fees & costs',
       lines: [
         // TWO CUTS ON TWO DIFFERENT BASES, so they are never one line. The
         // commission is charged on the item price alone; card processing is
         // charged on the whole order, sales tax included, plus a flat charge per
         // order. One combined percentage would be a number matching neither.
+        //
+        // They are also the ONLY TWO LINES HERE THE APP MODELS. The six below
+        // are ledger rows read as they were written, which is why a month that
+        // disagrees on those means missing rows rather than a wrong rate — see
+        // `solveRatesFor`.
         line('whatnotFee', 'Whatnot commission', d.whatnotFee, feeDetail),
         // Written as the sum it is, so a person can reproduce it with a
-        // calculator \u2014 including WHICH total the percentage runs on.
+        // calculator — including WHICH total the percentage runs on.
         //
         // THE SALES TAX RIDES ON THE DETAIL'S TOOLTIP rather than in the section
-        // note. It answers exactly one question \u2014 why this charge is more than
-        // the card percentage of sales \u2014 and it is asked by whoever is already
+        // note. It answers exactly one question — why this charge is more than
+        // the card percentage of sales — and it is asked by whoever is already
         // squinting at this line, so the standing note is the wrong place to
         // make every other reader walk past it.
         {
           ...line('processingFee', 'Payment processing', d.processingFee, processingDetail),
           detailHint:
             `The commission is charged on the sale price; card processing is charged on the ` +
-            `order total \u2014 that sale price plus ${usd(salesTax)} of sales tax the buyers ` +
+            `order total — that sale price plus ${usd(salesTax)} of sales tax the buyers ` +
             `paid. That tax is not revenue and not a cost: it passes to the state and appears ` +
             `in no figure on this statement.`
-        }
-      ],
-      subtotal: c2(d.totalFees),
-      subtotalLabel: 'Total fees',
-      note:
-        `Whatnot pays net \u2014 these two were already deducted. Sales minus both equals the ` +
-        `payout exactly.`
-    },
-    {
-      // POSTAGE IS BACK ON THE STATEMENT, and the four lines are the four the
-      // ledger actually carries — subsidy received, postage charged back,
-      // giveaway postage and refund postage — subtotalling to `netShipping`.
-      //
-      // It was taken off for a release on the owner's instruction ("we will add
-      // this cost in for some other way but right now not necessary") and net
-      // profit was higher by exactly this subtotal on every day and every period
-      // while it was gone. Nothing had to be recomputed to bring it back: the
-      // five fields behind these lines were never removed from a day and never
-      // stopped rolling up, which was the whole reason they were kept.
-      //
-      // FOUR LINES RATHER THAN ONE NET FIGURE, because they run opposite ways.
-      // The subsidy is money Whatnot puts in and the other three take money out;
-      // a single "shipping" line would net a contribution against a cost and
-      // leave a reader unable to tell a cheap month from a well-subsidised one.
-      //
-      // Every line here is EXPORT money — Whatnot wrote each of these rows — so
-      // the subtotal can be checked against a Whatnot screen, and each line
-      // drills to the rows behind it. That is also what let the reconciliation's
-      // row-side strip go: the statement claims this money now, so the check no
-      // longer has to hand it back.
-      key: 'shipping',
-      label: 'Shipping',
-      lines: [
+        },
+        // FOUR POSTAGE LINES RATHER THAN ONE NET FIGURE, because they run
+        // opposite ways. The subsidy is money Whatnot puts in and the other
+        // three take money out; a single "shipping" line would net a
+        // contribution against a cost and leave a reader unable to tell a cheap
+        // month from a well-subsidised one.
         line('shippingSubsidy', 'Shipping subsidy', d.shippingSubsidy),
         line('shippingCharges', 'Postage charged back', d.shippingCharges),
         // Named for the act rather than the bucket: "giveaway postage" is what
         // it cost to MAIL a prize, and it is not the prize. That cost is
-        // `giveawayCost`, two sections up in cost of goods, and conflating the
-        // two is the mistake this label exists to prevent.
+        // `giveawayCost`, up in cost of goods, and conflating the two is the
+        // mistake this label exists to prevent.
         line('giveawayShipping', 'Giveaway postage', d.giveawayShipping),
-        line('refundShipping', 'Postage on refunds', d.refundShipping)
+        line('refundShipping', 'Postage on refunds', d.refundShipping),
+        line('showBoost', 'Show Boost', d.showBoost),
+        line('reversals', 'Refunded orders', d.reversals)
       ],
-      subtotal: c2(d.netShipping),
-      subtotalLabel: 'Net shipping',
+      subtotal: c2(c2(d.totalFees) + c2(d.netShipping) + c2(d.showBoost) + c2(d.reversals)),
+      subtotalLabel: 'Fees & costs',
       note:
-        `Postage Whatnot handled: what it paid toward shipping, less what it charged back. ` +
-        `Mailing a giveaway is here; what the giveaway itself cost is in cost of goods.`
-    },
-    // AND THERE IS NO PACKAGING SECTION EITHER, FOR THE OPPOSITE REASON.
-    //
-    // Sleeves, top loaders, team bags, shipping labels, team bag stickers and
-    // mailers were six lines subtotalling to "Packaging" in this slot, and the
-    // owner took that cost off the statement too, to account for it another way.
-    // Net profit is higher by exactly what those six came to, on every day and
-    // every period.
-    //
-    // WHERE IT DIFFERS FROM THE POSTAGE ABOVE, and the difference is the one
-    // thing a reader has to carry away: no ledger row has ever held a sleeve.
-    // Packaging was money the statement CLAIMED that Whatnot's export cannot
-    // corroborate, so while it lived here the day-versus-rows reconciliation had
-    // to strip it from the DAY side to make the two comparable. Now that no
-    // section claims it, that strip has gone with it — a strip left behind would
-    // have made the day side short by exactly the packaging and put "these
-    // numbers do not add up" over a correct statement, which is the failure the
-    // release before last existed to remove.
-    //
-    // The fourteen fields behind these lines are still on every day, still
-    // computed from the same model and still summed through every rollup — see
-    // `StreamDayFinance`, which says why — so putting the cost back is adding a
-    // section here and taking the day-side strip back in `buildView`.
-    {
-      key: 'showCosts',
-      label: 'Other show costs',
-      lines: [line('showBoost', 'Show Boost', d.showBoost)],
-      subtotal: c2(d.showBoost),
-      subtotalLabel: 'Show costs'
+        `Whatnot pays net, so every charge here was already deducted before the money arrived. ` +
+        `They are the lines its own month-end summary prints under Fees and costs, one each — ` +
+        `so what it credited less this subtotal is the payout exactly.`
     },
     {
       // ITS OWN SECTION, not a second line under "Other show costs", and the
@@ -2728,13 +2891,12 @@ export function buildPnl(d: {
       subtotal: general,
       subtotalLabel: 'General expenses'
     },
-    {
-      key: 'adjustments',
-      label: 'Adjustments and exceptions',
-      lines: [line('reversals', 'Refunded orders', d.reversals)],
-      subtotal: c2(d.reversals),
-      subtotalLabel: 'Adjustments'
-    },
+    // AND THERE IS NO "ADJUSTMENTS AND EXCEPTIONS" SECTION, for the same reason
+    // there is no separate Shipping or Other show costs one: refunded orders are
+    // money Whatnot took, its summary prints them under Fees & costs, and they
+    // are now the last line of that section. A section of their own put the same
+    // figure in a second place on the statement and left the fee subtotal unable
+    // to be compared with anything the platform states.
     {
       key: 'netProfit',
       label: 'Net profit',

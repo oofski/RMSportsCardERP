@@ -1115,5 +1115,81 @@ ok(
   'or that nobody has said at all'
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== the terms are editable for the life of the order ===')
+// ---------------------------------------------------------------------------
+// The owner: "in the edit sales order section can you go ahead and let me change
+// the payment options like on delivery or upon delivery."
+//
+// paymentTiming could only be set on the CREATE form, and that form is refused
+// the moment an invoice posts — so an order written before the terms were agreed
+// carried "Terms not set" for ever. It is an INTENTION about a deal, revised like
+// any other, not a fact the document fixes.
+{
+  const made = inv.saveInvoice(
+    {
+      customerName: 'Invented Terms Buyer',
+      invoiceDate: '2026-05-01',
+      location: 'RM',
+      lines: [{ item: 'Invented Hobby Box', quantity: 1, rate: 250 }]
+    },
+    null
+  )
+  ok(made.paymentTiming === null, 'an order can start with nobody having said', String(made.paymentTiming))
+
+  const front = inv.setInvoicePaymentTiming(made.id, 'front', null)
+  ok(!front.error && front.invoice.paymentTiming === 'front', 'it can be set to up front', front.error ?? '')
+
+  const delivery = inv.setInvoicePaymentTiming(made.id, 'delivery', null)
+  ok(delivery.invoice.paymentTiming === 'delivery', 'and changed again afterwards')
+
+  // NOT SAID IS A REAL THIRD ANSWER and has to be reachable, or an order ticked
+  // by mistake could never be put back to "nobody has decided".
+  const cleared = inv.setInvoicePaymentTiming(made.id, null, null)
+  ok(cleared.invoice.paymentTiming === null, 'and cleared back to not-said', String(cleared.invoice.paymentTiming))
+
+  // NOTHING ABOUT THE MONEY MOVES. What somebody agreed about WHEN to pay is a
+  // different fact from whether they have.
+  const paid = inv.setInvoicePaid(made.id, true, null)
+  ok(!!paid.invoice.paidAt, 'an order marked paid carries the date')
+  const after = inv.setInvoicePaymentTiming(made.id, 'front', null)
+  ok(
+    after.invoice.paidAt === paid.invoice.paidAt,
+    'and changing the terms afterwards does NOT touch it',
+    String(after.invoice.paidAt)
+  )
+
+  // IT MOVES THE GATE, which is the whole reason it is worth changing. An unpaid
+  // up-front order is held off the packing list; an on-delivery one is not.
+  const held = inv.saveInvoice(
+    {
+      customerName: 'Invented Terms Buyer',
+      invoiceDate: '2026-05-02',
+      location: 'RM',
+      lines: [{ item: 'Invented Hobby Box', quantity: 1, rate: 250 }]
+    },
+    null
+  )
+  inv.setInvoicePaymentTiming(held.id, 'front', null)
+  ok(
+    typeof inv.invoiceStageRefusal(held.id, 'sent') === 'string',
+    'setting an unpaid order to up front closes the packing gate'
+  )
+  inv.setInvoicePaymentTiming(held.id, 'delivery', null)
+  ok(
+    inv.invoiceStageRefusal(held.id, 'sent') === null,
+    'and setting it to on delivery opens it again',
+    String(inv.invoiceStageRefusal(held.id, 'sent'))
+  )
+
+  // A VOID owes nothing and will not be paid on any terms.
+  inv.setInvoiceStatus(made.id, 'void', null)
+  const voided = inv.setInvoicePaymentTiming(made.id, 'delivery', null)
+  ok(!!voided.error, 'a voided order refuses', voided.error ?? '(accepted)')
+
+  const gone = inv.setInvoicePaymentTiming('no-such-order', 'front', null)
+  ok(!!gone.error && gone.invoice === null, 'and one that is gone says so', gone.error ?? '')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

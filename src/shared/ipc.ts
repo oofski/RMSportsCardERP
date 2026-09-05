@@ -77,6 +77,16 @@ export const IPC = {
   invSaleRecord: 'inventory:sale:record',
   invStockAdd: 'inventory:stock:add',
   invStockAdjust: 'inventory:stock:adjust',
+  /**
+   * MOVE UNITS BETWEEN TWO SHELVES, cost layers and all.
+   *
+   * Its own channel rather than a flag on the adjust one, because it is a
+   * different act with a different guarantee: an adjustment changes how much
+   * there is, and a move changes only where it is. Folding them together would
+   * put the one operation that must never alter valuation behind the one that
+   * exists to alter it. See @shared/stockMove.
+   */
+  invStockMove: 'inventory:stock:move',
   // Stock we own and no longer have. Sending CONSUMES the cost lots, which is
   // what makes consigned units unsellable and unbreakable without a check being
   // added to either path — see @shared/consignment.
@@ -95,6 +105,8 @@ export const IPC = {
   invImageAdd: 'inventory:images:add',
   invImageRemove: 'inventory:images:remove',
   invIncomingList: 'inventory:incoming:list',
+  /** Read-only: what in the inventory does not tie out. See @shared/stockAudit. */
+  invStockAudit: 'inventory:stock:audit',
   invIncomingAdd: 'inventory:incoming:add',
   invIncomingReceive: 'inventory:incoming:receive',
   invIncomingCancel: 'inventory:incoming:cancel',
@@ -109,6 +121,22 @@ export const IPC = {
   invProductAvailability: 'inventory:product:availability',
   /** What ONE place is holding, product by product. See stockAtLocation. */
   invStockAtLocation: 'inventory:location:stock',
+  /**
+   * WHAT ONE SHOP HAS HANDED OVER AND WHAT BECAME OF IT — bought, here, sold.
+   *
+   * Beside the shelf read rather than replacing it: a sales order still asks
+   * "what can I draw", which is the shelf alone. This is the settling-up
+   * question. See shopShelf.
+   */
+  invShopShelf: 'inventory:location:shelf',
+  /**
+   * WHICH SALES TOOK THIS PRODUCT OFF THIS SHOP'S SHELF.
+   *
+   * The other half of invShopBuys: that one says which purchase order a case
+   * arrived on, this says which sale took it. Both are needed at a roadshow,
+   * where the case that arrives and leaves in one afternoon is the ordinary one.
+   */
+  invShopSales: 'inventory:location:sales',
   /** Every buy behind one product at one shop, newest first. See shopBuys. */
   invShopBuys: 'inventory:location:buys',
   /** Where a product's stock came from, and which POs are still bringing more. */
@@ -146,6 +174,7 @@ export const IPC = {
   supplySetImage: 'supplies:set-image',
   supplyRemoveImage: 'supplies:remove-image',
   supplyOrdersList: 'supplies:orders:list',
+  supplyOrderHistory: 'supplies:orders:history',
   supplyOrderCreate: 'supplies:orders:create',
   supplyOrderSetStatus: 'supplies:orders:set-status',
   supplyOrderDelete: 'supplies:orders:delete',
@@ -199,6 +228,25 @@ export const IPC = {
   // rather than a button.
   invoiceQboSetItemSku: 'invoices:qbo:set-item-sku',
   invoiceSendFromQbo: 'invoices:qbo:send',
+  /**
+   * Record a payment in QuickBooks for an invoice already marked paid here.
+   *
+   * A SEPARATE PRESS, never a side effect of ticking paid, and the reason is the
+   * same one createQboItem gives: this writes to somebody else's books, and an
+   * action that moves money has to be the thing somebody pressed rather than
+   * something that happened while they pressed something else. It is also the
+   * only way a failure can be reported to the person who caused it.
+   */
+  invoiceRecordQboPayment: 'invoices:qbo:record-payment',
+  /**
+   * Take the stock for an order that never took any.
+   *
+   * A line clamped to an empty shelf writes no stock move, and no move means the
+   * order is missing from inventory, from the wholesale history and from the
+   * P&L — all three of which read FROM invoice_stock_moves. Nothing re-ran when
+   * the goods arrived. See rebookInvoiceStock.
+   */
+  invoiceRebookStock: 'invoices:stock:rebook',
   invoiceOpenInQbo: 'invoices:qbo:open',
   // How the invoice reaches the buyer: the standing payment instructions that go
   // on every one of them, and whether QuickBooks emails it the moment it is
@@ -305,6 +353,8 @@ export const IPC = {
   // The fulfilment board — one read for all three columns, because the column
   // an order belongs in is derived. See @shared/fulfillment.
   invoicesFulfillment: 'invoices:fulfillment',
+  /** Which cost layers each line drew. Read-only. See @shared/lineSources. */
+  invoiceLineSources: 'invoices:line-sources',
   invoiceSetDims: 'invoices:set-dims',
   invoiceSetItemsInHand: 'invoices:set-items-in-hand',
   invoiceSetLineRouting: 'invoices:set-line-routing',
@@ -312,9 +362,30 @@ export const IPC = {
   // Separate from save, which also rewrites the buyer, the number, the dates
   // and the terms, and is refused once a document has posted.
   invoiceSetLines: 'invoices:set-lines',
+  // What POSTING a sale cost us, corrected after it has gone out. Separate from
+  // save for the same reason set-lines is — and needed even more, because
+  // postage is bought when the parcel goes, which is always after the form
+  // that used to be the only way to record it has closed for good.
+  invoiceSetShippingCost: 'invoices:set-shipping-cost',
+  invoiceSetPaymentTiming: 'invoices:set-payment-timing',
   invoiceSetForceReady: 'invoices:set-force-ready',
 
   // Purchase orders
+  // A copy of the database the owner can keep. Owner-only, both channels —
+  // the file carries the QuickBooks token and the payment instructions, so it
+  // is credential material and not an ordinary export.
+  backupPreview: 'backup:preview',
+  backupDownload: 'backup:download',
+
+  // Putting one back. Four channels rather than one, because staging, judging
+  // and swapping are separate acts with separate blast radii — see
+  // src/shared/restore.ts. `restoreStage` writes a file and decides nothing;
+  // `restoreConfirm` is the only one that can cost anybody data.
+  restoreStage: 'restore:stage',
+  restoreStatus: 'restore:status',
+  restoreConfirm: 'restore:confirm',
+  restoreCancel: 'restore:cancel',
+
   poList: 'po:list',
   poGet: 'po:get',
   poCreate: 'po:create',
@@ -337,7 +408,19 @@ export const IPC = {
   poSetHeader: 'po:set-header',
   poUpdateLine: 'po:update-line',
   poRemoveLine: 'po:remove-line',
+  /**
+   * TAKE A LINE OFF A ROADSHOW TAB, reversing what it put on the shelf.
+   *
+   * Its own channel because it is a different act with a different guard: the
+   * one above refuses anything already checked in, which is every tab line ever
+   * written. See removeTabLine.
+   */
+  poRemoveTabLine: 'po:remove-tab-line',
   poSetFreight: 'po:set-freight',
+  poAddAdjustment: 'po:adjustment:add',
+  poRemoveAdjustment: 'po:adjustment:remove',
+  poAddPayment: 'po:payment:add',
+  poRemovePayment: 'po:payment:remove',
   // WHICH OPEN ROADSHOW ORDER STILL HAS THIS PRODUCT ON THE SHELF, so a sales
   // order line can sell that order's cases rather than whatever is oldest.
   // See @shared/poStock.
@@ -595,6 +678,14 @@ export const IPC = {
   qboForget: 'qbo:forget',
   qboTest: 'qbo:test',
   /**
+   * Time each hop of the relay chain separately and name the one that failed.
+   *
+   * `qboTest` answers "does the whole thing work". This answers "which part of
+   * it does not", which is a different and much harder question when every
+   * failure arrives as the single word "aborted". See @shared/relayDiagnosis.
+   */
+  qboDiagnoseRelay: 'qbo:relay:diagnose',
+  /**
    * Move the connection this machine already holds onto the cloud relay. Run
    * ONCE, by the owner, on the one laptop that is connected today — after which
    * no machine holds QuickBooks credentials at all. See the handler for why the
@@ -662,6 +753,18 @@ export const IPC = {
   finRatesList: 'finance:rates:list',
   finRateSave: 'finance:rates:save',
   finRateDelete: 'finance:rates:delete',
+  // What the PLATFORM says a window sold, and how that compares with what this
+  // app derives for the same days.
+  //
+  // Revenue here is calculated, not recorded — the ledger states only the net,
+  // and gross is the net with a modelled fee added back — so until these
+  // channels there was nothing outside the app any revenue figure had ever been
+  // checked against. The check solves the commission that reproduces the stated
+  // figure, which is the one term that actually varies.
+  finStatements: 'finance:statements:list',
+  finStatementSave: 'finance:statements:save',
+  finStatementDelete: 'finance:statements:delete',
+  finRevenueCheck: 'finance:revenue:check',
   // Costs typed against a business day — product opened, given away or written
   // off. A dollar amount only: nothing here moves stock.
   finExpensesList: 'finance:expenses:list',

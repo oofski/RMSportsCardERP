@@ -45,6 +45,29 @@ export interface InventorySortRow {
   avgCost: number | null
   totalCost: number | null
   spread: number | null
+  /**
+   * The spread as a percentage of what was paid, or null wherever `spread` is.
+   *
+   * ITS OWN KEY, not a derivation at sort time, and that is the point of the
+   * whole column: ranking by dollar spread ranks by how much of a product is
+   * held as much as by how well it was bought, so the two orders are genuinely
+   * different questions and each needs its own arrow. See @shared/spread.
+   */
+  spreadPct: number | null
+  /**
+   * When somebody last entered a high bid, as an ISO instant, or null if
+   * nobody ever has.
+   *
+   * OPTIONAL, because only the Pricing tab has a column for it — the on-hand
+   * Overview does not draw the date and must not be forced to invent one. A
+   * table that omits it simply has no such column to click, and the key sorts
+   * every row as missing if one ever did.
+   *
+   * An ISO string sorts correctly as a string: fixed width, most significant
+   * field first. Parsing it to a number here would buy nothing and would give
+   * an unparseable value a silent NaN rather than an honest null.
+   */
+  lastPriced?: string | null
 }
 
 /**
@@ -66,7 +89,9 @@ export const INVENTORY_SORT_KEYS = [
   'invValue',
   'avgCost',
   'totalCost',
-  'spread'
+  'spread',
+  'spreadPct',
+  'lastPriced'
 ] as const
 
 export type InventorySortKey = (typeof INVENTORY_SORT_KEYS)[number]
@@ -95,6 +120,16 @@ export function inventorySortValue(row: InventorySortRow, key: string): SortValu
       return row.totalCost
     case 'spread':
       return row.spread
+    case 'spreadPct':
+      return row.spreadPct
+    case 'lastPriced':
+      // `?? null` and not `?? ''`: a product nobody has priced is MISSING, and
+      // compareSortValues sinks missing to the bottom in both directions. An
+      // empty string would sort as a real value below every date ascending and
+      // above none of them descending, so the never-priced rows — the ones the
+      // Pricing tab exists to surface — would sit in a different place
+      // depending on which way the arrow pointed.
+      return row.lastPriced ?? null
     default:
       return null
   }
@@ -110,6 +145,8 @@ export function inventorySortValue(row: InventorySortRow, key: string): SortValu
  */
 export function firstSortDir(key: string): SortDir {
   if (key === 'product' || key === 'structure') return 'asc'
+  // lastPriced opens descending with the rest: "when did I last touch this"
+  // means the most recent first, and the never-priced rows sink either way.
   return 'desc'
 }
 

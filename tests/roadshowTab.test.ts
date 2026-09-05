@@ -49,9 +49,16 @@ const invoices = require('../src/main/db/invoices')
 const inventory = require('../src/main/db/inventory')
 const dealTickets = require('../src/main/db/dealTickets')
 const prov = require('../src/main/db/provenance')
+const inv = require('../src/main/db/inventory')
+const { assertStockLotsConsistent } = require('../src/main/db/lots')
+const invoiceStock = require('../src/main/db/invoiceStock')
+const orderExtras = require('../src/main/db/orderExtras')
+const { saveStockLocation } = require('../src/main/db/stockLocations')
 const { offerableOrders, soleSourceOrder, supplyRefusal } = require('../src/shared/poStock')
 const { salesOrderKindOf } = require('../src/shared/invoices')
 const {
+  emptyShelfHeadline,
+  unpricedTabWarning,
   isOpenTab,
   isRoadshowLocation,
   isTab,
@@ -1147,6 +1154,834 @@ ok(
   'AND THE LINE STOPS CLAIMING A PROVENANCE NOTHING CAN OPEN — the label is what goes, not the line',
   String(orphan.lines[0].sourcePoId)
 )
+
+console.log('\n=== 9. an empty shop column says WHY it is empty ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, looking at New York on the roadshow board: the column said 0 and
+ * "Nothing here yet", and the footer directly underneath it said
+ * "PO-0452 · $0.00 · 1 unpriced". His words: "why is the roadshow tab not
+ * showing the product ... that doesn't make sense."
+ *
+ * BOTH HALVES WERE TRUE. The column reads the SHELF and the footer reads the
+ * TAB, deliberately — a case bought at a shop and sold out of it the same
+ * afternoon leaves the shelf at zero and stays on the week's tab for ever. So
+ * the defect was the SENTENCE: "Nothing here yet. Add what you buy" asserts
+ * nothing was ever added, which is false while a tab is running and false in the
+ * expensive direction — it invites somebody to add the case a second time.
+ *
+ * Sections 9a and 9b pin the sentence; 9c drives the whole thing through the
+ * real store, because a note derived from figures no purchase order actually
+ * produces would pass its own test and still be wrong on the screen.
+ */
+{
+  ok(
+    /Nothing here yet/.test(emptyShelfHeadline(null)) && unpricedTabWarning(null, 3) === null,
+    '9a — NO TAB IS STILL "nothing here yet": the week has not started and there is nothing else to say'
+  )
+  ok(
+    /Nothing here yet/.test(
+      emptyShelfHeadline({ poNumber: 'PO-9001', orderedUnits: 0, receivedUnits: 0, pendingPriceCount: 0 })
+    ),
+    'a tab opened and not yet bought against reads the same — to the person looking at the column it IS the same state'
+  )
+
+  const SOLD_TAB = {
+    poNumber: 'PO-0452',
+    orderedUnits: 1,
+    receivedUnits: 1,
+    pendingPriceCount: 1
+  }
+  const sold = emptyShelfHeadline(SOLD_TAB)
+  ok(
+    !/Nothing here yet/.test(sold) && /has been sold/.test(sold) && sold.includes('PO-0452'),
+    '9b — THE ONE THAT WAS WRONG: everything bought here has been sold, and the sentence names the tab holding it',
+    sold
+  )
+  ok(
+    /1 unit\b/.test(sold) && !/1 units/.test(sold),
+    'singular reads as one unit, not "1 units"',
+    sold
+  )
+  ok(
+    unpricedTabWarning(SOLD_TAB, 0) === null,
+    'AND A SHOP WHOSE CASE HAS SOLD IS NOT WARNED — the money is spent and the sale is booked; Wholesale reports that, and this board can only prevent the NEXT one',
+    String(unpricedTabWarning(SOLD_TAB, 0))
+  )
+  ok(
+    unpricedTabWarning({ poNumber: 'PO-0452', orderedUnits: 2, receivedUnits: 2, pendingPriceCount: 0 }, 0) === null,
+    'a fully priced tab has nothing left to warn about'
+  )
+
+  const home = emptyShelfHeadline({
+    poNumber: 'PO-0453',
+    orderedUnits: 3,
+    receivedUnits: 0,
+    pendingPriceCount: 0
+  })
+  ok(
+    /coming home/.test(home) && !/been sold/.test(home),
+    'UNITS ROUTED HOME ARE NOT "SOLD" — they are on a lorry, and saying sold would send somebody looking for money that was never taken',
+    home
+  )
+  const both = emptyShelfHeadline({
+    poNumber: 'PO-0454',
+    orderedUnits: 5,
+    receivedUnits: 2,
+    pendingPriceCount: 0
+  })
+  ok(
+    /2 units bought here have been sold/.test(both) && /3 units more are coming home/.test(both),
+    'and a week that did both says both, with the right count on each side',
+    both
+  )
+  const impossible = emptyShelfHeadline({
+    poNumber: 'PO-0455',
+    orderedUnits: 1,
+    receivedUnits: 9,
+    pendingPriceCount: 0
+  })
+  ok(
+    /the 1 unit bought here has been sold/.test(impossible) && !/coming home/.test(impossible),
+    'RECEIVED IS CAPPED AT ORDERED: a column reading "9 sold and −8 coming home" is worse than merely wrong',
+    impossible
+  )
+}
+
+// --- 9c. the same thing, driven through the store ---------------------------
+{
+  const SHOP9 = 'Roadshow Ashford'
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_shelf9', 'SKU-S9', 'Ashford Hobby Box', 'Baseball', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+
+  // The Add-what-you-bought path exactly: ongoing, no destination typed, price
+  // left blank because the shop has not said yet.
+  const tab9opened = po.createPurchaseOrder(
+    {
+      supplier: SHOP9,
+      location: '',
+      ongoing: true,
+      lines: [{ productId: 'p_shelf9', quantity: 1, unitPrice: 0, pricePending: true }]
+    },
+    'emp_owner'
+  )
+  const tabId = tab9opened.id
+  ok(
+    inventory.stockAtLocation(SHOP9).length === 1,
+    'the case is on the shop shelf the moment it is typed — buying at a shop IS taking delivery'
+  )
+
+  const off = invoices.saveInvoice(
+    {
+      customerName: 'Ashford Buyer',
+      invoiceNumber: 'SO-R900',
+      invoiceDate: '2026-08-27',
+      location: SHOP9,
+      lines: [{ item: 'Ashford Hobby Box', productId: 'p_shelf9', quantity: 1, rate: 500 }]
+    },
+    'emp_owner'
+  )
+  ok(!!off.id, 'and it is sold straight out of the shop')
+
+  const shelf = inventory.stockAtLocation(SHOP9)
+  const tab9 = po.listOpenRoadshowTabs().find((t: any) => t.id === tabId)
+  ok(
+    shelf.length === 0 && !!tab9 && tab9.lineCount === 1,
+    'THE EXACT CONTRADICTION REPRODUCED: the shelf is bare and the tab still holds the line',
+    `${shelf.length} on shelf, ${tab9 ? tab9.lineCount : 'no'} lines`
+  )
+  ok(
+    tab9.total === 0 && tab9.pendingPriceCount === 1,
+    'reading $0.00 and 1 unpriced, which is what the footer showed',
+    `${tab9.total} / ${tab9.pendingPriceCount}`
+  )
+  const standing9 = {
+    poNumber: tab9.poNumber,
+    orderedUnits: tab9.orderedUnits,
+    receivedUnits: tab9.receivedUnits,
+    pendingPriceCount: tab9.pendingPriceCount ?? 0
+  }
+  const note = emptyShelfHeadline(standing9)
+  ok(
+    !/Nothing here yet/.test(note) &&
+      /has been sold/.test(note) &&
+      note.includes(tab9.poNumber),
+    'AND THE COLUMN NOW SAYS SO, off figures a real purchase order produced',
+    note
+  )
+  ok(
+    unpricedTabWarning(standing9, 0) === null,
+    'and NOT warned about, because its case has already gone — nothing on this shelf can be saved by shouting'
+  )
+
+  // And the fix the warning asks for actually works from here.
+  const line9 = po.getPurchaseOrder(tabId).lines[0]
+  const priced = po.setPurchaseOrderLinePrice(tabId, line9.id, 220, 'emp_owner')
+  ok(!priced.error, 'pricing the line is accepted even though its case has gone', String(priced.error))
+  const after = po.listOpenRoadshowTabs().find((t: any) => t.id === tabId)
+  ok(
+    (after.pendingPriceCount ?? 0) === 0 &&
+      unpricedTabWarning(
+        {
+          poNumber: after.poNumber,
+          orderedUnits: after.orderedUnits,
+          receivedUnits: after.receivedUnits,
+          pendingPriceCount: after.pendingPriceCount ?? 0
+        },
+        0
+      ) === null,
+    'and the warning goes away once it is done — a nag that does not clear is one people stop reading'
+  )
+}
+
+
+console.log('\n=== 10. pricing a tab line updates the RIGHT product on Wholesale ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner: "make sure in the wholesale financial tab that the right products
+ * when we price are getting updated."
+ *
+ * The chain being pinned runs the whole width of the app and has four links, and
+ * a break in any one of them is silent: `setPurchaseOrderLinePrice` re-costs the
+ * layers ITS OWN line opened → `restateConsumedCost` walks the slices those
+ * layers gave out and moves `invoice_stock_moves.cost_total` by the delta →
+ * `listWholesaleSales` reports that column. Nothing is recomputed on the way, so
+ * what this screen says and what the ledger holds are the same number.
+ *
+ * TWO PRODUCTS ON ONE TAB, priced one at a time, is the fixture that matters. A
+ * version that re-costed everything the tab touched would pass with one product
+ * on it and quietly restate the other's margin in real use — which is precisely
+ * the failure the ask names.
+ *
+ * ## And the zero in between is now SAID
+ *
+ * Between the sale and the pricing, the row's cost really is nothing: the layer
+ * opened at a placeholder because the shop had not given a figure. That is a
+ * third state — not the legacy "the layers are gone" and not a real cost — and
+ * it used to print as $0.00 and a 100% margin. `costPending` marks it and names
+ * the tab to go and price, and it clears itself when somebody does.
+ */
+{
+  const SHOP10 = 'Roadshow Bexley'
+  product('p_wsA', 'RS-WSA', 'Bexley Alpha Case')
+  product('p_wsB', 'RS-WSB', 'Bexley Beta Case')
+
+  const tab10 = po.createPurchaseOrder(
+    {
+      supplier: SHOP10,
+      location: '',
+      ongoing: true,
+      lines: [
+        { productId: 'p_wsA', quantity: 1, unitPrice: 0, pricePending: true },
+        { productId: 'p_wsB', quantity: 1, unitPrice: 0, pricePending: true }
+      ]
+    },
+    'emp_owner'
+  )
+  const sale10 = invoices.saveInvoice(
+    {
+      customerName: 'Bexley Buyer',
+      invoiceNumber: 'SO-R950',
+      invoiceDate: '2026-08-28',
+      location: SHOP10,
+      lines: [
+        { item: 'Bexley Alpha Case', productId: 'p_wsA', quantity: 1, rate: 900 },
+        { item: 'Bexley Beta Case', productId: 'p_wsB', quantity: 1, rate: 700 }
+      ]
+    },
+    'emp_owner'
+  )
+  const wsRow = (productId: string): any =>
+    invoiceStock
+      .listWholesaleSales(db)
+      .find((r: any) => r.invoiceId === sale10.id && r.productId === productId)
+
+  const a0 = wsRow('p_wsA')
+  const b0 = wsRow('p_wsB')
+  ok(!!a0 && !!b0, 'both lines reach the Wholesale report the moment the order is saved')
+  ok(
+    a0.costKnown === true && a0.costPending === true && a0.cost === 0,
+    'AND THE COST IS MARKED AS STILL TO COME — the layer is there, the figure is not',
+    `known ${a0.costKnown} / pending ${a0.costPending} / cost ${a0.cost}`
+  )
+  ok(
+    a0.pendingPoNumber === tab10.poNumber,
+    'naming the tab to go and price, rather than leaving somebody to find it',
+    String(a0.pendingPoNumber)
+  )
+
+  // -- the assertion the ask is actually about -------------------------------
+  const detail10 = po.getPurchaseOrder(tab10.id)
+  const lineA = detail10.lines.find((l: any) => l.productId === 'p_wsA')
+  const lineB = detail10.lines.find((l: any) => l.productId === 'p_wsB')
+  const pricedA = po.setPurchaseOrderLinePrice(tab10.id, lineA.id, 400, 'emp_owner')
+  ok(!pricedA.error, 'the shop finally says the Alpha case was $400', String(pricedA.error))
+
+  const a1 = wsRow('p_wsA')
+  const b1 = wsRow('p_wsB')
+  ok(
+    a1.costPending === false && a1.cost === 400 && a1.margin === 500,
+    'THE PRICED PRODUCT PICKS THE FIGURE UP — cost 400 against 900 sold, margin 500',
+    `pending ${a1.costPending} / cost ${a1.cost} / margin ${a1.margin}`
+  )
+  ok(
+    b1.costPending === true && b1.cost === 0 && b1.margin === 700,
+    'AND THE OTHER ONE DOES NOT MOVE — pricing Alpha must not restate Beta, which is the whole ask',
+    `pending ${b1.costPending} / cost ${b1.cost} / margin ${b1.margin}`
+  )
+
+  po.setPurchaseOrderLinePrice(tab10.id, lineB.id, 250, 'emp_owner')
+  const a2 = wsRow('p_wsA')
+  const b2 = wsRow('p_wsB')
+  ok(
+    b2.cost === 250 && b2.margin === 450 && b2.costPending === false,
+    'pricing Beta then lands on Beta',
+    `cost ${b2.cost} / margin ${b2.margin}`
+  )
+  ok(
+    a2.cost === 400 && a2.margin === 500,
+    'and Alpha is exactly where it was — the second pricing did not touch the first',
+    `cost ${a2.cost} / margin ${a2.margin}`
+  )
+
+  // -- and the flag does not latch onto ordinary stock -----------------------
+  product('p_wsC', 'RS-WSC', 'Ordinary Priced Case')
+  const plain10 = po.createPurchaseOrder(
+    {
+      supplier: 'Cardinal Distribution',
+      location: 'RM',
+      lines: [{ productId: 'p_wsC', quantity: 1, unitPrice: 300 }]
+    },
+    'emp_owner'
+  )
+  po.setPurchaseOrderStatus(plain10.id, 'received', 'emp_owner')
+  const plainSale = invoices.saveInvoice(
+    {
+      customerName: 'Ordinary Buyer',
+      invoiceNumber: 'SO-R951',
+      invoiceDate: '2026-08-28',
+      location: 'RM',
+      lines: [{ item: 'Ordinary Priced Case', productId: 'p_wsC', quantity: 1, rate: 500 }]
+    },
+    'emp_owner'
+  )
+  const plainRow = invoiceStock
+    .listWholesaleSales(db)
+    .find((r: any) => r.invoiceId === plainSale.id)
+  ok(
+    !!plainRow && plainRow.costPending === false && plainRow.pendingPoNumber === null,
+    'A CASE BOUGHT AT A KNOWN PRICE IS NEVER MARKED — the flag is about the tab, not about roadshows in general',
+    plainRow ? `pending ${plainRow.costPending} / ${plainRow.pendingPoNumber}` : 'no row'
+  )
+  ok(
+    plainRow.cost === 300 && plainRow.margin === 200,
+    'and it reports its real cost and margin as it always did',
+    `cost ${plainRow.cost} / margin ${plainRow.margin}`
+  )
+}
+
+
+console.log('\n=== 11. the warning is about stock STILL HERE, and nothing else ===')
+// ---------------------------------------------------------------------------
+/**
+ * Two owner corrections, in order.
+ *
+ * FIRST: the warning shipped inside the empty-column branch, so the only shops
+ * that said anything were the ones with nothing left to lose, and a shop holding
+ * four unpriced cases was silent. "Why can not everything is showing like that,
+ * it should be the same."
+ *
+ * THEN, once it showed everywhere: it was keyed on the TAB'S UNPRICED LINE
+ * COUNT, so a shop whose only case had been bought and sold in one afternoon got
+ * four lines of warning about a case that was gone. "Can you like not do the
+ * warnings for anything that was sold, but rather let me click on it if it was
+ * sold and then it tells me which PO and SO it was attached to."
+ *
+ * That is the right split. An unpriced case that has SOLD is money spent and a
+ * sale booked; the board cannot undo either, and Wholesale is the screen that
+ * reports it — holding those rows out of its margin totals and naming the tab.
+ * What a shop board can prevent is the NEXT wrong sale, which is only ever about
+ * stock still on the shelf. So the count is UNITS STANDING HERE at no price.
+ */
+{
+  const TAB = { poNumber: 'PO-0451', orderedUnits: 4, receivedUnits: 4, pendingPriceCount: 4 }
+
+  const held = unpricedTabWarning(TAB, 4)
+  ok(
+    !!held && held.includes('PO-0451') && /4 units standing here/.test(held),
+    'A SHOP STILL HOLDING UNPRICED CASES IS WARNED, and the count is UNITS ON THE SHELF',
+    String(held)
+  )
+  ok(
+    !!held && /before they are sold/.test(held),
+    'so the instruction is the one thing the board can still prevent',
+    String(held)
+  )
+  ok(
+    !!held && !/sold from/.test(held) && !/already made/.test(held),
+    'IT NEVER CLAIMS A SALE — two cases moved to RM empty a column too',
+    String(held)
+  )
+
+  ok(
+    unpricedTabWarning(TAB, 0) === null,
+    'THE CORRECTION: a tab whose unpriced cases have all gone says NOTHING, however many lines it still has',
+    String(unpricedTabWarning(TAB, 0))
+  )
+  ok(
+    unpricedTabWarning({ ...TAB, pendingPriceCount: 0 }, 0) === null,
+    'and a fully priced week says nothing either'
+  )
+  ok(unpricedTabWarning(null, 5) === null, 'a shop with no tab has nothing to warn about')
+
+  const one = unpricedTabWarning(TAB, 1)
+  ok(
+    !!one && /1 unit standing here has no price/.test(one) && /before it is sold/.test(one),
+    'singular reads as one unit throughout',
+    String(one)
+  )
+
+  // UNITS, NOT LINES. A line of six that has sold five leaves one problem, and a
+  // line count would report the whole line long after most of it stopped being
+  // one.
+  ok(
+    /1 unit/.test(String(unpricedTabWarning({ ...TAB, pendingPriceCount: 1 }, 1))),
+    'the number said is the units left, not the lines on the tab',
+    String(unpricedTabWarning({ ...TAB, pendingPriceCount: 1 }, 1))
+  )
+
+  ok(
+    !/no price/.test(emptyShelfHeadline(TAB)),
+    'THE HEADLINE SAYS NOTHING ABOUT PRICING — one answers "why is this empty" and the other "what still owes a number"',
+    emptyShelfHeadline(TAB)
+  )
+}
+
+console.log('\n=== 12. a tab the APP opened says so, on the tab ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, looking at a roadshow board where two shops he had never bought
+ * anything at each held a tab with one unpriced line on it: "why are there
+ * inventory items showing in California but nowhere else, that doesn't make
+ * sense?"
+ *
+ * ## Nothing was wrong with the board. Something was missing from the record
+ *
+ * Writing a sales order that draws from a shop with an empty shelf BUYS the
+ * shortfall onto that shop's tab and sells it in the same transaction — see
+ * buyShortfallAtShop, which exists because at a counter "short" means "I bought
+ * it a minute ago and have not written it down". So a tab appears, holding one
+ * unpriced line, with nothing standing on the shelf, for a shop nobody
+ * deliberately bought at.
+ *
+ * That is a REAL LIABILITY created as a side effect, and applyInvoiceStock has
+ * always said so — on the SALES ORDER. Which is the wrong document: the sale is
+ * the thing somebody has just written and already understands, and the
+ * unexplained line turns up on the tab, a week later, when they are working out
+ * what a shop is owed. Its own comment names the failure — "the first anybody
+ * knows of it is an unexplained line on a week's bill" — and that is exactly
+ * what happened.
+ *
+ * Both documents now carry it, each naming the other.
+ */
+{
+  /**
+   * ONE OF THE FOUR REAL SHOPS, and it has to be. `roadshowShopNamed` gates the
+   * automatic purchase on ROADSHOW_SHOPS, so an invented name would buy nothing
+   * and this section would pass by testing the wrong thing entirely — which is
+   * also the reason it never fires at RM or at a supplier's address.
+   *
+   * Registered as a shelf first, because a sale only reaches this path when its
+   * destination is a place stock can sit; opening a tab normally does that, and
+   * here there is no tab yet.
+   */
+  const SHOP12 = 'Texas Roadshow'
+  saveStockLocation({ label: SHOP12 }, 'emp_owner')
+  product('p_auto', 'RS-AUT', 'Kendal Auto Case')
+
+  const before = po.listOpenRoadshowTabs().length
+  const sale12 = invoices.saveInvoice(
+    {
+      customerName: 'Kendal Buyer',
+      invoiceNumber: 'SO-R980',
+      invoiceDate: '2026-08-31',
+      location: SHOP12,
+      lines: [{ item: 'Kendal Auto Case', productId: 'p_auto', quantity: 2, rate: 800 }]
+    },
+    'emp_owner'
+  )
+  ok(!!sale12.id, 'a sale is written against a shop holding nothing')
+
+  const tabs12 = po.listOpenRoadshowTabs()
+  const auto = tabs12.find((t: any) => (t.supplier ?? '').toLowerCase() === SHOP12.toLowerCase())
+  ok(
+    tabs12.length === before + 1 && !!auto,
+    'THE APP OPENED A TAB BY ITSELF — this is the shape that made no sense on the board',
+    `${before} → ${tabs12.length}`
+  )
+  ok(
+    auto.lineCount === 1 && (auto.pendingPriceCount ?? 0) === 1 && auto.total === 0,
+    'one unpriced line, nothing owed yet — exactly what the card showed',
+    `${auto.lineCount} / ${auto.pendingPriceCount} / ${auto.total}`
+  )
+  ok(
+    inventory.stockAtLocation(SHOP12).length === 0,
+    'and nothing is standing at the shop, because the sale consumed it in the same breath'
+  )
+
+  const poLog = orderExtras.listOrderEvents('po', auto.id).map((e: any) => String(e.detail ?? ''))
+  const said = poLog.find((d: string) => /added automatically/.test(d))
+  ok(
+    !!said,
+    'THE FIX: THE TAB ITSELF EXPLAINS WHERE ITS LINE CAME FROM — this is the document somebody opens to settle a week',
+    JSON.stringify(poLog)
+  )
+  ok(
+    !!said && said.includes('SO-R980') && said.includes(SHOP12) && /2 units/.test(said),
+    'naming the sale that caused it, the shop, and how many',
+    String(said)
+  )
+  ok(
+    !!said && /price still to be entered/.test(said),
+    'and saying the price is still owed, which is the thing that has to be chased'
+  )
+
+  const soLog = orderExtras.listOrderEvents('so', sale12.id).map((e: any) => String(e.detail ?? ''))
+  const mirror = soLog.find((d: string) => /to fill this order/.test(d))
+  ok(
+    !!mirror && mirror.includes(auto.poNumber),
+    'AND THE SALE STILL SAYS IT TOO, now naming the tab — either document can be read on its own',
+    JSON.stringify(soLog)
+  )
+
+  // A sale off a shelf that HAS the stock buys nothing and says nothing.
+  inventory.addStock('p_auto', SHOP12, 3, 250, 'bought properly this time', 'emp_owner')
+  const quiet = invoices.saveInvoice(
+    {
+      customerName: 'Kendal Buyer',
+      invoiceNumber: 'SO-R981',
+      invoiceDate: '2026-08-31',
+      location: SHOP12,
+      lines: [{ item: 'Kendal Auto Case', productId: 'p_auto', quantity: 1, rate: 800 }]
+    },
+    'emp_owner'
+  )
+  ok(
+    !orderExtras
+      .listOrderEvents('so', quiet.id)
+      .some((e: any) => /to fill this order/.test(String(e.detail ?? ''))),
+    'A SALE THE SHELF COULD COVER SAYS NOTHING — the note marks an automatic purchase, not every roadshow sale'
+  )
+}
+
+
+console.log('\n=== 13. taking something back off a tab, and the shop’s whole story ===')
+// ---------------------------------------------------------------------------
+/**
+ * Two asks, one screen. The owner: "need a delete button for items added on the
+ * thing" and "anything that is sold from the roadshow shops should still show up
+ * on the list ... it shows me what is sold and what is what's stuck."
+ *
+ * ## Why there was no delete button to add
+ *
+ * `removePurchaseOrderLine` refuses the moment any unit has been checked in —
+ * correctly, for an ordinary purchase. But a tab line is checked in the instant
+ * it is typed, so that refusal fired on every line the roadshow board could
+ * create and its advice was to cancel a week's trading over one wrong box.
+ * `removeTabLine` reverses the receipt and removes the line together, and the
+ * guard is `reverseLotReceipt` throwing on anything drawn down — a case that has
+ * been SOLD cannot be un-bought, because the sale is real and its cost of goods
+ * came out of that layer.
+ *
+ * ## Why the column could not show what sold
+ *
+ * It listed what was STANDING. A case bought and sold the same afternoon never
+ * appeared, so a shop that had traded all day read as empty. `shopShelf` counts
+ * three things from three tables — bought off the receipts, here off the shelf,
+ * sold off the invoice moves — rather than one number and two subtractions,
+ * because stock leaves a shelf three ways and a subtraction cannot tell a sale
+ * from a case driven home.
+ */
+{
+  const SHOP13 = 'Kentucky Roadshow'
+  saveStockLocation({ label: SHOP13 }, 'emp_owner')
+  product('p_keep', 'RS-KEP', 'Kentucky Keeper Case')
+  product('p_oops', 'RS-OOP', 'Kentucky Mistake Case')
+  product('p_gone', 'RS-GON', 'Kentucky Sold Case')
+
+  const tab13 = po.createPurchaseOrder(
+    {
+      supplier: SHOP13,
+      location: '',
+      ongoing: true,
+      lines: [
+        { productId: 'p_keep', quantity: 2, unitPrice: 300 },
+        { productId: 'p_oops', quantity: 1, unitPrice: 400 },
+        { productId: 'p_gone', quantity: 3, unitPrice: 500 }
+      ]
+    },
+    'emp_owner'
+  )
+  invoices.saveInvoice(
+    {
+      customerName: 'Kentucky Buyer',
+      invoiceNumber: 'SO-R990',
+      invoiceDate: '2026-08-31',
+      location: SHOP13,
+      lines: [{ item: 'Kentucky Sold Case', productId: 'p_gone', quantity: 3, rate: 900 }]
+    },
+    'emp_owner'
+  )
+
+  // --- the list: everything the shop dealt in, not just what is left ---------
+  const shelf = prov.shopShelf(SHOP13)
+  const row = (id: string): any => shelf.find((r: any) => r.productId === id)
+  ok(shelf.length === 3, 'ALL THREE PRODUCTS ARE LISTED, including the one wholly sold', String(shelf.length))
+  ok(
+    !!row('p_gone') && row('p_gone').bought === 3 && row('p_gone').here === 0 && row('p_gone').sold === 3,
+    'THE ASK: a case bought and sold at the shop still shows, and says it sold — it used to vanish entirely',
+    JSON.stringify(row('p_gone'))
+  )
+  ok(
+    row('p_keep').bought === 2 && row('p_keep').here === 2 && row('p_keep').sold === 0,
+    'something untouched reads as bought and still here',
+    JSON.stringify(row('p_keep'))
+  )
+  ok(
+    shelf.every((r: any) => r.movedOn === 0),
+    'and nothing is reported as having moved on, because nothing did'
+  )
+
+  // A case driven home is NOT reported as sold — the reason sold is counted.
+  const drove = inv.moveStock({ productId: 'p_keep', from: SHOP13, to: 'RM', quantity: 1 }, 'emp_owner')
+  ok(!drove.error, 'one keeper is driven home', String(drove.error))
+  const after13 = prov.shopShelf(SHOP13).find((r: any) => r.productId === 'p_keep')
+  ok(
+    after13.bought === 2 && after13.here === 1 && after13.sold === 0 && after13.movedOn === 1,
+    'IT COUNTS AS MOVED ON, NOT SOLD — a subtraction would have called it a sale and sent somebody looking for the money',
+    JSON.stringify(after13)
+  )
+
+  // --- the delete: what can go, and what cannot ------------------------------
+  const detail13 = po.getPurchaseOrder(tab13.id)
+  const oopsLine = detail13.lines.find((l: any) => l.productId === 'p_oops')
+  const goneLine = detail13.lines.find((l: any) => l.productId === 'p_gone')
+
+  ok(
+    !!po.removePurchaseOrderLine(tab13.id, oopsLine.id).error,
+    'THE OLD DELETE STILL REFUSES IT — a tab line is always already checked in, which is why there was no button'
+  )
+
+  const removed = po.removeTabLine(tab13.id, oopsLine.id, 'emp_owner')
+  ok(!removed.error, 'THE NEW ONE TAKES IT BACK', String(removed.error))
+  ok(
+    inv.stockQty('p_oops', SHOP13) === 0,
+    'AND THE SHELF GOES BACK AS IT WAS — the receipt was reversed, not just the paperwork deleted',
+    String(inv.stockQty('p_oops', SHOP13))
+  )
+  ok(
+    !prov.shopShelf(SHOP13).some((r: any) => r.productId === 'p_oops'),
+    'so it leaves the shop’s list entirely — it was never bought'
+  )
+  ok(
+    !po.getPurchaseOrder(tab13.id).lines.some((l: any) => l.id === oopsLine.id),
+    'and the line is off the tab'
+  )
+  ok(
+    po.getPurchaseOrder(tab13.id).total === 2 * 300 + 3 * 500,
+    'the tab’s total drops by exactly what that line was worth',
+    String(po.getPurchaseOrder(tab13.id).total)
+  )
+
+  const sold13 = po.removeTabLine(tab13.id, goneLine.id, 'emp_owner')
+  ok(
+    !!sold13.error && /already been sold/.test(String(sold13.error)),
+    'A LINE WHOSE CASES ARE SOLD IS REFUSED — the sale is real and its cost came out of that layer',
+    String(sold13.error)
+  )
+  ok(
+    po.getPurchaseOrder(tab13.id).lines.some((l: any) => l.id === goneLine.id),
+    'and the refusal changed nothing'
+  )
+  assertStockLotsConsistent(db)
+  ok(true, 'the stock/lot invariant survived the removal')
+
+  // A settled week is history.
+  const keepLine = po.getPurchaseOrder(tab13.id).lines.find((l: any) => l.productId === 'p_keep')
+  po.setPurchaseOrderLinePrice(tab13.id, keepLine.id, 300, 'emp_owner')
+  po.closeRoadshowTab(tab13.id, 'emp_owner')
+  const shut = po.removeTabLine(tab13.id, keepLine.id, 'emp_owner')
+  ok(
+    !!shut.error && /settled/.test(String(shut.error)),
+    'AND A SETTLED TAB REFUSES TOO — the bill was paid on the strength of what was on it',
+    String(shut.error)
+  )
+}
+
+
+console.log('\n=== 14. click a sold case and it names the PO and the SO ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner: "let me click on it if it was sold and then it tells me which PO
+ * and SO it was attached to."
+ *
+ * The panel could already say which purchase order a case came IN on and had
+ * nothing at all about where it went — so the ordinary roadshow case, bought and
+ * sold in one afternoon, left two documents and no way to get from the shelf to
+ * either. `shopSales` is the other half.
+ *
+ * Also pins `unpricedHere`, which is what the column's warning now counts. It
+ * comes off the LAYERS rather than the tab's lines, because a line of six that
+ * has sold five leaves one unpriced unit standing and a line count cannot say
+ * so.
+ */
+{
+  const SHOP14 = 'California Roadshow'
+  saveStockLocation({ label: SHOP14 }, 'emp_owner')
+  product('p_trail', 'RS-TRL', 'California Trail Case')
+
+  const tab14 = po.createPurchaseOrder(
+    {
+      supplier: SHOP14,
+      location: '',
+      ongoing: true,
+      lines: [{ productId: 'p_trail', quantity: 6, unitPrice: 0, pricePending: true }]
+    },
+    'emp_owner'
+  )
+  const before14 = prov.shopShelf(SHOP14).find((r: any) => r.productId === 'p_trail')
+  ok(
+    before14.unpricedHere === 6,
+    'six unpriced cases are standing at the shop, and the shelf count knows it',
+    JSON.stringify(before14)
+  )
+  ok(
+    prov.shopSales(SHOP14, 'p_trail').length === 0,
+    'and nothing has been sold from it yet'
+  )
+
+  const sale14 = invoices.saveInvoice(
+    {
+      customerName: 'Trail Buyer',
+      invoiceNumber: 'SO-R995',
+      invoiceDate: '2026-09-01',
+      location: SHOP14,
+      lines: [{ item: 'California Trail Case', productId: 'p_trail', quantity: 5, rate: 800 }]
+    },
+    'emp_owner'
+  )
+
+  const went = prov.shopSales(SHOP14, 'p_trail')
+  ok(went.length === 1, 'THE SALE IS FOUND from the shelf', JSON.stringify(went))
+  ok(
+    went[0].invoiceNumber === 'SO-R995' &&
+      went[0].customerName === 'Trail Buyer' &&
+      went[0].quantity === 5,
+    'naming the sales order, the buyer and how many THIS shop supplied',
+    JSON.stringify(went[0])
+  )
+  const buys14 = prov.shopBuys(SHOP14, 'p_trail')
+  ok(
+    buys14.length === 1 && buys14[0].poNumber === po.getPurchaseOrder(tab14.id).poNumber,
+    'AND THE PURCHASE ORDER IS STILL THERE BESIDE IT — both ends of the case, from one click',
+    JSON.stringify(buys14.map((b: any) => b.poNumber))
+  )
+
+  // UNITS, NOT LINES: one line, five sold, ONE still unpriced on the shelf.
+  const after14 = prov.shopShelf(SHOP14).find((r: any) => r.productId === 'p_trail')
+  ok(
+    after14.unpricedHere === 1 && after14.here === 1 && after14.sold === 5,
+    'ONE unpriced unit is left standing, not "one unpriced line" covering six — that is why the warning counts layers',
+    JSON.stringify(after14)
+  )
+  ok(
+    /1 unit standing here/.test(
+      String(
+        unpricedTabWarning(
+          { poNumber: 'PO-X', orderedUnits: 6, receivedUnits: 6, pendingPriceCount: 1 },
+          after14.unpricedHere
+        )
+      )
+    ),
+    'so the column warns about the one, not the six'
+  )
+
+  // A PRICED CASE STANDING BESIDE AN UNPRICED ONE IS NOT A PROBLEM, and this is
+  // the only arrangement that proves the filter is doing anything: without the
+  // price-pending test, unpricedHere would simply be "what is on the shelf" and
+  // the column would nag about stock whose cost is perfectly well known.
+  product('p_known', 'RS-KNW', 'California Known Case')
+  po.createPurchaseOrder(
+    {
+      supplier: SHOP14,
+      location: '',
+      ongoing: true,
+      lines: [{ productId: 'p_known', quantity: 3, unitPrice: 275 }]
+    },
+    'emp_owner'
+  )
+  const known = prov.shopShelf(SHOP14).find((r: any) => r.productId === 'p_known')
+  ok(
+    known.here === 3 && known.unpricedHere === 0,
+    'THREE CASES AT A KNOWN PRICE COUNT AS NONE UNPRICED — the filter is on the line’s price, not on the shelf',
+    JSON.stringify(known)
+  )
+  const mixed = prov
+    .shopShelf(SHOP14)
+    .reduce((n: number, r: any) => n + r.unpricedHere, 0)
+  ok(
+    mixed === 1,
+    'so a shop holding one unpriced case and three priced ones warns about ONE',
+    String(mixed)
+  )
+  ok(
+    /1 unit standing here/.test(
+      String(
+        unpricedTabWarning(
+          { poNumber: 'PO-X', orderedUnits: 9, receivedUnits: 9, pendingPriceCount: 1 },
+          mixed
+        )
+      )
+    ),
+    'and says so in those words'
+  )
+
+  // A SALE FROM ANOTHER SHELF IS NOT THIS SHOP'S. The move puts a case at RM;
+  // selling it there must not appear on the shop's trail.
+  inv.moveStock({ productId: 'p_trail', from: SHOP14, to: 'RM', quantity: 1 }, 'emp_owner')
+  invoices.saveInvoice(
+    {
+      customerName: 'Home Buyer',
+      invoiceNumber: 'SO-R996',
+      invoiceDate: '2026-09-01',
+      location: 'RM',
+      lines: [{ item: 'California Trail Case', productId: 'p_trail', quantity: 1, rate: 800 }]
+    },
+    'emp_owner'
+  )
+  const still = prov.shopSales(SHOP14, 'p_trail')
+  ok(
+    still.length === 1 && still.every((x: any) => x.invoiceNumber !== 'SO-R996'),
+    'A CASE DRIVEN HOME AND SOLD FROM RM IS NOT ON THE SHOP’S TRAIL — the move row is keyed on the shelf it actually left from',
+    JSON.stringify(still.map((x: any) => x.invoiceNumber))
+  )
+  const end14 = prov.shopShelf(SHOP14).find((r: any) => r.productId === 'p_trail')
+  ok(
+    end14.sold === 5 && end14.movedOn === 1 && end14.here === 0,
+    'and the shop’s own row reads five sold, one moved on, none left',
+    JSON.stringify(end14)
+  )
+  ok(
+    unpricedTabWarning(
+      { poNumber: 'PO-X', orderedUnits: 6, receivedUnits: 6, pendingPriceCount: 1 },
+      end14.unpricedHere
+    ) === null,
+    'AND THE COLUMN FALLS SILENT — nothing unpriced is standing there any more, whatever the tab still says'
+  )
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

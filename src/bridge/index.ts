@@ -19,9 +19,14 @@
  * channel names. That is the property that lets it be bundled into a browser.
  */
 import { IPC, type AppInfo } from '@shared/ipc'
+import type { RelayDiagnosis } from '@shared/relayDiagnosis'
+import type { StockAudit } from '@shared/stockAudit'
+import type { LineSources } from '@shared/lineSources'
 import type { Permission } from '@shared/permissions'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
-import type { FreightPatch } from '@shared/freight'
+import type { RestoreCheck, RestoreStatus } from '@shared/restore'
+import type { RevenueCheck, StatementInput, WhatnotStatement } from '@shared/statementFit'
+import type { FreightPatch, PaymentTiming } from '@shared/freight'
 import type { SupplyingOrder } from '@shared/poStock'
 import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
 import type { ShippingPerformanceView } from '@shared/performance'
@@ -72,10 +77,12 @@ import type {
 import type { EmailSettings, RedactedEmailSettings } from '@shared/emailSettings'
 import type { InvoiceDelivery } from '@shared/invoiceDelivery'
 import type { Consignment, NewConsignment } from '@shared/consignment'
+import type { StockMoveRequest } from '@shared/stockMove'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
 import type { NewPurchaseOrderLine, PoRoutingPatch } from '@shared/types'
+import type { BackupPreview } from '@shared/backup'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -164,7 +171,13 @@ import type {
   UploadedFile
 } from '@shared/types'
 import type { StockProvenance } from '@shared/provenance'
-import type { ProductAvailability, ShopBuy, StockAtLocationRow } from '@shared/availability'
+import type {
+  ProductAvailability,
+  ShopBuy,
+  ShopSale,
+  ShopShelfRow,
+  StockAtLocationRow
+} from '@shared/availability'
 import type {
   ShipBatchUrl,
   ShipBreakAudit,
@@ -291,6 +304,15 @@ export interface BridgeTransport {
     as: 'text' | 'bytes'
     multiple?: boolean
   }): Promise<UploadedFile[]>
+  /**
+   * Choose a backup and stream it to the server, bypassing the JSON body.
+   *
+   * Browser-only, and optional for the same reason the pickers are: Electron
+   * does not have it, and its absence is how `restore.stage` knows to open a
+   * native dialog instead. A database is far too large to travel as base64
+   * inside an ordinary request — see the /api/restore route.
+   */
+  uploadRestore?(): Promise<Result<RestoreCheck>>
 }
 
 export function createBridge(ipcRenderer: BridgeTransport) {
@@ -359,6 +381,46 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.hoursTimesheet, { employeeId, start, end }),
       export: (req: ExportRequest): Promise<ExportResult> => ipcRenderer.invoke(IPC.hoursExport, req)
     },
+    /**
+     * A copy of the database the owner can keep.
+     *
+     * OWNER ONLY, enforced in the handler rather than here — the file carries
+     * the QuickBooks token and the payment instructions, so it is credential
+     * material. `preview` answers null to anybody else, which is what makes the
+     * panel render an empty state instead of throwing a banner.
+     *
+     * `download` needs no transport branch: it is the save-dialog shape every
+     * other exporter uses, which the server turns into a download token on its
+     * own. See src/main/backupIpc.ts.
+     */
+    backup: {
+      preview: (): Promise<BackupPreview | null> => ipcRenderer.invoke(IPC.backupPreview),
+      download: (): Promise<ExportResult> => ipcRenderer.invoke(IPC.backupDownload)
+    },
+    /**
+     * Putting a backup back.
+     *
+     * `stage` is the one method here with a transport branch, and it is the same
+     * branch `pickFile` uses: the ABSENCE of a browser-only capability is how a
+     * method knows it is on the desktop. Electron opens a native dialog inside
+     * the handler and reads the path directly. A browser has no path to give, so
+     * `uploadRestore` streams the bytes to the server — deliberately not through
+     * `invoke`, because every ordinary call is JSON and a database base64'd into
+     * a JSON body would hit the request cap at around 35 MB.
+     *
+     * The other three are ordinary calls on both transports. Only the delivery
+     * of the file differs; the judging and the swapping are identical.
+     */
+    restore: {
+      stage: (): Promise<Result<RestoreCheck>> =>
+        ipcRenderer.uploadRestore
+          ? ipcRenderer.uploadRestore()
+          : ipcRenderer.invoke(IPC.restoreStage),
+      status: (): Promise<RestoreStatus | null> => ipcRenderer.invoke(IPC.restoreStatus),
+      confirm: (input: { stageId: string; typed: string }): Promise<Result<{ filename: string }>> =>
+        ipcRenderer.invoke(IPC.restoreConfirm, input),
+      cancel: (): Promise<Result<true>> => ipcRenderer.invoke(IPC.restoreCancel)
+    },
     clock: {
       status: (): Promise<ClockStatus> => ipcRenderer.invoke(IPC.clockStatus),
       in: (): Promise<Result<ClockStatus>> => ipcRenderer.invoke(IPC.clockIn),
@@ -407,6 +469,13 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       adjustStock: (input: AdjustStockInput): Promise<Result<InventoryProduct>> =>
         ipcRenderer.invoke(IPC.invStockAdjust, input),
       /**
+       * Carry units to another shelf WITHOUT touching what they are worth — the
+       * layer travels with them. See @shared/stockMove for why two adjustments
+       * are not the same thing.
+       */
+      moveStock: (input: StockMoveRequest): Promise<Result<InventoryProduct>> =>
+        ipcRenderer.invoke(IPC.invStockMove, input),
+      /**
        * Stock we own and no longer have. Sending CONSUMES the cost lots, which
        * is what makes consigned units unsellable and unbreakable — see
        * @shared/consignment.
@@ -436,6 +505,8 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       removeImage: (imageId: string): Promise<Result<ProductImage[]>> =>
         ipcRenderer.invoke(IPC.invImageRemove, imageId),
       listIncoming: (): Promise<IncomingShipment[]> => ipcRenderer.invoke(IPC.invIncomingList),
+      /** What in the inventory does not tie out. Read-only. */
+      stockAudit: (): Promise<StockAudit> => ipcRenderer.invoke(IPC.invStockAudit),
       addIncoming: (input: NewIncomingShipment): Promise<Result<IncomingShipment>> =>
         ipcRenderer.invoke(IPC.invIncomingAdd, input),
       receiveIncoming: (id: string): Promise<Result> =>
@@ -471,6 +542,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Everything standing at one place. See stockAtLocation. */
       stockAtLocation: (location: string): Promise<StockAtLocationRow[]> =>
         ipcRenderer.invoke(IPC.invStockAtLocation, location),
+      /** Everything a shop has handed over, and what became of it. */
+      shopShelf: (location: string): Promise<ShopShelfRow[]> =>
+        ipcRenderer.invoke(IPC.invShopShelf, location),
+      /** Which sales took this product off this shop's shelf. */
+      shopSales: (location: string, productId: string): Promise<ShopSale[]> =>
+        ipcRenderer.invoke(IPC.invShopSales, { location, productId }),
       /** The dates and order numbers behind one product at one shop. */
       shopBuys: (location: string, productId: string): Promise<ShopBuy[]> =>
         ipcRenderer.invoke(IPC.invShopBuys, { location, productId }),
@@ -551,6 +628,8 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       removeImage: (id: string): Promise<Result<Supply>> =>
         ipcRenderer.invoke(IPC.supplyRemoveImage, { id }),
       listOrders: (): Promise<SupplyOrder[]> => ipcRenderer.invoke(IPC.supplyOrdersList),
+      /** Finished orders that have aged off the board. */
+      orderHistory: (): Promise<SupplyOrder[]> => ipcRenderer.invoke(IPC.supplyOrderHistory),
       createOrder: (input: NewSupplyOrder): Promise<Result<SupplyOrder>> =>
         ipcRenderer.invoke(IPC.supplyOrderCreate, input),
       setOrderStatus: (id: string, status: SupplyOrderStatus): Promise<Result<SupplyOrder>> =>
@@ -579,6 +658,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       > => ipcRenderer.invoke(IPC.qboPromote),
       test: (): Promise<Result<{ companyName: string; realmId: string }>> =>
         ipcRenderer.invoke(IPC.qboTest),
+      /** Time each hop and name the one that failed. See @shared/relayDiagnosis. */
+      diagnoseRelay: (): Promise<Result<RelayDiagnosis>> =>
+        ipcRenderer.invoke(IPC.qboDiagnoseRelay),
       authorizeUrl: (): Promise<Result<{ url: string; redirectUri: string }>> =>
         ipcRenderer.invoke(IPC.qboAuthorizeUrl),
       pasteTokens: (
@@ -640,17 +722,26 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       addLines: (id: string, lines: NewPurchaseOrderLine[]): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poAddLines, { id, lines }),
       /**
-       * Correct the descriptive half: who the order is from, and its note.
+       * Correct the header: who the order is from, its note, and the freight
+       * the supplier charged.
        *
-       * No status gate — this touches nothing with money attached, and the
-       * commonest moment to notice the supplier is missing is while filing an
-       * order that is already closed. Lines that never named their own supplier
-       * follow the header automatically, because they store the inheritance
-       * rather than a copy.
+       * No status gate — the supplier and the note touch nothing with money
+       * attached, and the commonest moment to notice the supplier is missing is
+       * while filing an order that is already closed. Lines that never named
+       * their own supplier follow the header automatically, because they store
+       * the inheritance rather than a copy.
+       *
+       * SHIPPING COST does move money: it restates the order total and the COGS
+       * row behind it. It is still ungated, because the carrier's invoice
+       * usually arrives after the boxes and freight never enters a FIFO cost
+       * lot — so a late correction cannot leave the document and the shelf
+       * disagreeing, which is the risk that freezes a line price.
+       *
+       * Omit a field to leave it alone; an explicit null clears it.
        */
       setHeader: (
         id: string,
-        patch: { supplier?: string | null; notes?: string | null }
+        patch: { supplier?: string | null; notes?: string | null; shippingCost?: number | null }
       ): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetHeader, { id, ...patch }),
       /**
@@ -668,9 +759,30 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Take a line off. Refused once anything on it has landed, and on the last one. */
       removeLine: (id: string, lineId: string): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poRemoveLine, { id, lineId }),
+      /** Undo something added at a shop — see removeTabLine. */
+      removeTabLine: (id: string, lineId: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poRemoveTabLine, { id, lineId }),
       /** Shipping + payment details. Omitted keys are left as they are. */
       setFreight: (id: string, patch: FreightPatch): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),
+      /** Money on the order that bought no goods. Signed — negative is a credit. */
+      addAdjustment: (id: string, amount: number, note: string | null): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poAddAdjustment, { id, amount, note }),
+      removeAdjustment: (adjustmentId: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poRemoveAdjustment, { adjustmentId }),
+      /**
+       * Money actually sent against the order. POSITIVE, always — a credit from
+       * the supplier changes what the order COST and belongs in an adjustment.
+       *
+       * `paid_at` follows from these: it is stamped once they cover the total
+       * and cleared if a removal drops them below it, so every screen that
+       * already reads it goes on meaning "settled" without being taught about
+       * part-payments.
+       */
+      addPayment: (id: string, amount: number, note: string | null): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poAddPayment, { id, amount, note }),
+      removePayment: (paymentId: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poRemovePayment, { paymentId }),
       /**
        * Which open roadshow orders still have this product on a given shelf.
        *
@@ -1354,6 +1466,27 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       deleteRate: (id: string): Promise<Result<WhatnotRatePeriod[]>> =>
         ipcRenderer.invoke(IPC.finRateDelete, id),
       /**
+       * What the platform says a window sold, and whether we agree.
+       *
+       * Revenue on the Streaming tab is DERIVED — the ledger states only the net
+       * and the gross is that net with a modelled fee added back — so these are
+       * the only calls in the finance surface that reach for something outside
+       * the app. `check` stores nothing: running it must never be the thing that
+       * moves a number, so saving the fitted rate is a separate `saveRate`.
+       */
+      statements: (): Promise<WhatnotStatement[]> => ipcRenderer.invoke(IPC.finStatements),
+      saveStatement: (input: StatementInput): Promise<Result<WhatnotStatement[]>> =>
+        ipcRenderer.invoke(IPC.finStatementSave, input),
+      deleteStatement: (id: string): Promise<Result<WhatnotStatement[]>> =>
+        ipcRenderer.invoke(IPC.finStatementDelete, id),
+      revenueCheck: (input: {
+        fromDate: string
+        toDate: string
+        statedGross: number
+        /** What the platform actually paid out. Null when the document does not say. */
+        statedPayout?: number | null
+      }): Promise<RevenueCheck | null> => ipcRenderer.invoke(IPC.finRevenueCheck, input),
+      /**
        * Costs typed against a business day — a pack opened for fun, a box written
        * off. A DOLLAR AMOUNT ONLY: nothing on this bridge moves stock, which is
        * what separates it from the streaming giveaway flow.
@@ -1710,8 +1843,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        * off after a day, and a purchase raised last week for goods only now
        * being invoiced is exactly the one somebody comes here looking for.
        */
-      linkablePos: (invoiceId: string): Promise<Result<LinkablePurchaseOrder[]>> =>
-        ipcRenderer.invoke(IPC.orderLinkablePos, invoiceId),
+      /** Every purchase this sale could name. `query` reaches past the newest 60. */
+      linkablePos: (
+        invoiceId: string,
+        query = ''
+      ): Promise<Result<LinkablePurchaseOrder[]>> =>
+        ipcRenderer.invoke(IPC.orderLinkablePos, { invoiceId, query }),
       linkDropship: (poId: string, invoiceId: string): Promise<Result<{ linked: true }>> =>
         ipcRenderer.invoke(IPC.orderLinkDropship, { poId, invoiceId }),
       /**
@@ -1788,7 +1925,10 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         created: number
         sent: number
         paid: number
+        /** What is still owed us, in every stage. See invoiceIsOwed. */
         outstanding: number
+        /** How many orders that figure is spread across. */
+        owedCount: number
         paidTotal: number
         thisMonth: number
       }> => ipcRenderer.invoke(IPC.invoiceStats),
@@ -2090,6 +2230,27 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         }>
       ): Promise<Result<InvoiceDetail>> => ipcRenderer.invoke(IPC.invoiceSetLines, { id, changes }),
 
+      /**
+       * What POSTING this sale cost us, corrected after it has gone out.
+       *
+       * The mirror of the freight box on a purchase order, with one difference
+       * that decides everything about it: on a SALE this is a cost we carry,
+       * not a charge to the buyer. It stays out of the order total and never
+       * reaches QuickBooks, so unlike setLines it cannot make our copy of a
+       * posted document disagree with Intuit's — and it is editable long after
+       * the invoice form has closed, because postage is bought when the parcel
+       * goes.
+       *
+       * `null` clears it back to "nobody has said", which is not zero: with
+       * nothing typed, `orderShippingCost` answers from the parcel labels
+       * instead. Refused on a void order.
+       */
+      setShippingCost: (id: string, shippingCost: number | null): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetShippingCost, { id, shippingCost }),
+      /** When this buyer pays — 'front', 'delivery', or null for not said. */
+      setPaymentTiming: (id: string, paymentTiming: PaymentTiming | null): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetPaymentTiming, { id, paymentTiming }),
+
       /** Send it anyway, ahead of the gates. Recorded as its own decision. */
       setForceReady: (id: string, forced: boolean): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSetForceReady, { id, forced }),
@@ -2162,6 +2323,19 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       > => ipcRenderer.invoke(IPC.invoiceCreateInQbo, { id, open }),
       sendFromQbo: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.invoiceSendFromQbo, id),
+      /** Where each line's units came from — which purchase order, at what cost. */
+      lineSources: (id: string): Promise<LineSources[]> =>
+        ipcRenderer.invoke(IPC.invoiceLineSources, id),
+      /** Take the shelf for an order that booked none. See rebookInvoiceStock. */
+      rebookStock: (
+        id: string
+      ): Promise<Result<{ id: string; units: number; message: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceRebookStock, id),
+      /** Record the payment in QuickBooks for an invoice paid here. */
+      recordQboPayment: (
+        id: string
+      ): Promise<Result<{ id: string; posted: boolean; message: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceRecordQboPayment, id),
       /**
        * The standing payment instructions, and whether QuickBooks emails each
        * invoice as it is posted. Machine-local — see the store.

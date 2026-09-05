@@ -24,9 +24,48 @@ import { useToast } from '../../components/Toast'
 import { useSession } from '../../lib/session'
 import { Money, Note } from './bits'
 import { finance, resultError } from './api'
-import { compactDayLabel, todayKey } from './time'
-import { reconInRange, reconRows, reconTotals, type ReconRow } from '@shared/pnlRecon'
-import { fitStatement, fitVerdict, type StatementFit } from '@shared/statementFit'
+import { compactDayLabel, dayRangeLabel, todayKey } from './time'
+import { RANGE_PRESETS, type DayRange } from './range'
+import {
+  checkWindow,
+  type LedgerParts,
+  pinTermsFor,
+  ledgerParts,
+  reconInRange,
+  reconRows,
+  reconTotals,
+  revenueStanding,
+  type CheckWindow,
+  type PinnedTermsFor,
+  type ReconRow
+} from '@shared/pnlRecon'
+import {
+  fitFromGross,
+  fitStatement,
+  fitVerdict,
+  grossFitVerdict,
+  type StatementFit,
+  type StatementInput,
+  type WindowFigures,
+  type WhatnotStatement,
+  payoutCheck,
+  solveRatesFor,
+  statementProblem,
+  statementTotals,
+  type SolvedRates
+} from '@shared/statementFit'
+
+/**
+ * FALSE AGAINST A PACKAGED PRELOAD THAT PREDATES THE SAVED-FIGURES BRIDGE.
+ *
+ * The rest of this screen still works on such a build — rates, coverage, both
+ * typed-in checks — so the saved-figures panel is simply not drawn rather than
+ * throwing "statements is not a function" on first paint. Same rule the `rates`
+ * check at the top of the render keeps, and for the same reason: the renderer
+ * and main ship as separate artifacts and one can be older than the other.
+ */
+const statementsReady =
+  typeof finance?.statements === 'function' && typeof finance?.saveStatement === 'function'
 
 /**
  * Finance → Fees & rates: what the platform takes, and when it took it.
@@ -161,7 +200,7 @@ export function RatesTab(): JSX.Element {
 
       <EffectiveRate periods={periods} />
 
-      <DayCoverage periods={periods} />
+      <DayCoverage periods={periods} canManage={canManage} onSaved={setPeriods} />
 
       <ProcessingPanel />
 
@@ -725,11 +764,52 @@ function spanLabel(p: { fromDate: string; toDate: string | null }): string {
  * should match Whatnot to the cent. `Revenue` is that same money with the
  * modelled fees added back, and it is the one column a wrong rate moves.
  */
-function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element | null {
+function DayCoverage({
+  periods,
+  canManage,
+  onSaved
+}: {
+  periods: WhatnotRatePeriod[]
+  /** Whether saved figures may be added, edited or removed. The IPC enforces the
+   *  same permission with `requireManage`; this only stops the buttons being
+   *  offered to somebody the write would then refuse. */
+  canManage: boolean
+  /** Hands the re-read list up, so saving a fitted rate refreshes the table
+   *  above rather than leaving the screen showing terms it no longer uses. */
+  onSaved: (next: WhatnotRatePeriod[]) => void
+}): JSX.Element | null {
   const [days, setDays] = useState<StreamDayFinance[] | null>(null)
   const [failed, setFailed] = useState(false)
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
+
+  /**
+   * THE WINDOW OPENS ON THE LAST FULL MONTH. IT USED TO OPEN ON NOTHING.
+   *
+   * These two boxes were `useState('')` and `useState('')`, and a blank end
+   * means NO FILTER in `reconInRange` — so every comparison ever drawn on this
+   * screen ran over THE ENTIRE LEDGER while the panels underneath it talked
+   * about "this window". Type July's payout in and the app compared one month
+   * against every night ever imported, then reported the difference as a
+   * discrepancy. That is the $24k the owner has been chasing, manufactured by
+   * the default value of two pieces of component state.
+   *
+   * The last full calendar month is the right default because it is the only
+   * preset on the range bar that is a CLOSED window, and a statement is always
+   * closed: it covers a period with two ends. "This month" runs to today, which
+   * no statement covers, and "last 30 days" is not a period anybody reports on.
+   *
+   * The two dates stay one piece of state so they can never be set half way —
+   * picking a saved figure moves both ends at once, and an intermediate render
+   * holding July's start with June's end would be a window nobody chose.
+   */
+  const [range, setRange] = useState<DayRange>(lastFullMonth)
+  const { from, to } = range
+  const setFrom = (v: string): void => setRange((r) => ({ ...r, from: v }))
+  const setTo = (v: string): void => setRange((r) => ({ ...r, to: v }))
+
+  /** What Whatnot states, kept. Null while the read is in flight — which is not
+   *  the same as "none saved", and the panels below say different things about
+   *  the two. */
+  const [statements, setStatements] = useState<WhatnotStatement[] | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -748,9 +828,148 @@ function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element
     }
   }, [])
 
+  // Read ONCE, and held HERE rather than inside the panel that compares against
+  // them, because two things need the very same list: the list you pick a window
+  // out of, and the check that asks whether any saved figure covers the window
+  // you picked. Two reads would eventually disagree, and a screen offering a row
+  // that the check beside it says does not exist is worse than either alone.
+  useEffect(() => {
+    if (!statementsReady) {
+      setStatements([])
+      return
+    }
+    let alive = true
+    void finance
+      .statements()
+      .then((next) => {
+        if (alive) setStatements(Array.isArray(next) ? next : [])
+      })
+      .catch(() => {
+        // LEFT AS null — "we could not find out" — and NOT as [], which means
+        // "there are none". They are different facts and only one of them is
+        // known here. Collapsing them made the panel print the positive claim
+        // "No figure from Whatnot has ever been saved" on a window that may
+        // already carry one, and its instruction is to type the figure and save
+        // it — which always INSERTS, so following a sentence the app had no
+        // grounds for produces a duplicate row for a period already covered.
+        // null fails the guard on the Note below, so the screen says nothing
+        // rather than something it cannot support. The typed-in boxes still
+        // work; they never needed the list.
+        if (alive) setStatements(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const all = useMemo(() => reconRows(days ?? [], periods), [days, periods])
   const rows = useMemo(() => reconInRange(all, from, to), [all, from, to])
   const totals = useMemo(() => reconTotals(rows), [rows])
+
+  /**
+   * WHAT THE LEDGER HOLDS for an arbitrary window — not the one on screen.
+   *
+   * The statement form asks about the dates being TYPED into it, which are
+   * usually not the dates the table below is showing: somebody filing April
+   * while looking at May is the ordinary case. So this takes its own bounds
+   * rather than closing over `from`/`to`.
+   *
+   * `ledgerNet` and not `netPaid`: the comparison is against the platform's
+   * payout, which covers every row it wrote — refunds, shipping, boosts and all
+   * — while `netPaid` is the sale rows alone. Comparing the payout with the
+   * sales would show a gap on every window that ever shipped a parcel.
+   */
+  const ledgerNetFor = useCallback(
+    (f: string, t: string): number | null => {
+      if (!isDayKey(f) || !isDayKey(t) || t < f) return null
+      const within = reconInRange(all, f, t)
+      if (within.length === 0) return null
+      return reconTotals(within).ledgerNet
+    },
+    [all]
+  )
+
+  /**
+   * The same figure as `ledgerNetFor`, broken into the buckets that make it.
+   *
+   * Only read when the two sides disagree — a breakdown under a figure that
+   * already ties is noise on every ordinary month, and the point of this one is
+   * to turn "twenty thousand apart" into somewhere to look.
+   */
+  const ledgerPartsFor = useCallback(
+    (f: string, t: string): LedgerParts | null => {
+      if (!isDayKey(f) || !isDayKey(t) || t < f) return null
+      const parts = ledgerParts(days ?? [], f, t)
+      return parts.total === 0 && parts.sales === 0 ? null : parts
+    },
+    [days]
+  )
+
+  /**
+   * The app's own figures for an arbitrary window, in the shape a fit wants.
+   *
+   * Same reason as `ledgerNetFor` for taking its own bounds: the statement being
+   * fitted is usually not the window on screen. `netPaid` here is the SALE rows
+   * only, which is the right side of that comparison — a statement's sales less
+   * its commission and card lines is the sales-side net, and the four other fee
+   * lines belong to buckets that never went through the fee model.
+   */
+  const windowFiguresFor = useCallback(
+    (f: string, t: string): WindowFigures | null => {
+      if (!isDayKey(f) || !isDayKey(t) || t < f) return null
+      const within = reconInRange(all, f, t)
+      if (within.length === 0) return null
+      const w = reconTotals(within)
+      return {
+        netPaid: w.netPaid,
+        derivedRevenue: w.grossSales,
+        derivedCommission: w.commission,
+        derivedProcessing: w.processing,
+        orders: w.orders
+      }
+    },
+    [all]
+  )
+
+  /**
+   * IS THIS WINDOW FIT TO BE COMPARED WITH AN OUTSIDE DOCUMENT?
+   *
+   * Judged ONCE, here, and handed to both panels — so the two can never disagree
+   * about whether the dates on screen mean anything. The table itself is not
+   * gated on it: a night-by-night view of the ledger with no dates set is a
+   * perfectly good view of the ledger. It is the panels that ASSERT AGREEMENT
+   * that must refuse, because that is where an open end stops being a
+   * convenience and becomes a claim that is not true. See @shared/pnlRecon.
+   */
+  const win = useMemo(() => checkWindow(from, to), [from, to])
+
+  /**
+   * THE TERMS BOTH PANELS HOLD FIXED, pinned by the rule the STORE uses.
+   *
+   * This screen used to pin them off `to || from || todayKey()` — the window's
+   * last day, and TODAY whenever the boxes were blank, which they were by
+   * default. So a fit on July's money was priced at whatever card terms happen
+   * to be in force today, while `whatnotStatements.revenueCheck` pinned the same
+   * question on the heaviest night and got a different answer. `pinTermsFor` is
+   * that rule, in one place, taking the lookup as a callback because the
+   * resolver differs on the two sides of the bridge.
+   */
+  const terms = useMemo(
+    () =>
+      pinTermsFor(
+        rows,
+        (day) => {
+          const r = effectiveFeeRates(periods, day)
+          return {
+            processingRate: r.processingRate,
+            taxRate: r.taxRate,
+            processingFlatCents: r.processingFlatCents
+          }
+        },
+        DEFAULT_TERMS
+      ),
+    [rows, periods]
+  )
 
   if (failed || days === null) return null
   if (all.length === 0) return null
@@ -792,6 +1011,19 @@ function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element
         </Note>
       )}
 
+      <StatementList
+        statements={statements}
+        canManage={canManage}
+        activeFrom={from}
+        activeTo={to}
+        ledgerNetFor={ledgerNetFor}
+        ledgerPartsFor={ledgerPartsFor}
+        windowFiguresFor={windowFiguresFor}
+        taxRate={terms.pinned.taxRate}
+        onPick={(s) => setRange({ from: s.fromDate, to: s.toDate })}
+        onSaved={setStatements}
+      />
+
       <div className="fin-recon-range">
         <label>
           <span>From</span>
@@ -801,12 +1033,30 @@ function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element
           <span>To</span>
           <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
         </label>
+        {/* THE PRESET IS ONE CLICK BECAUSE THE REFUSALS BELOW POINT AT IT. A
+            panel that says "these dates cannot be compared" and gives no way out
+            teaches somebody to type two dates from memory, which is the habit
+            this whole change exists to remove. */}
+        <button type="button" className="fin-more" onClick={() => setRange(lastFullMonth())}>
+          <Icon name="CalendarRange" size={13} /> Last month
+        </button>
         {(from || to) && (
-          <button type="button" className="fin-more" onClick={() => { setFrom(''); setTo('') }}>
-            <Icon name="X" size={13} /> Clear
+          <button
+            type="button"
+            className="fin-more"
+            onClick={() => setRange({ from: '', to: '' })}
+          >
+            <Icon name="X" size={13} /> Every night
           </button>
         )}
+        {/* THE WINDOW SPELLED OUT IN WORDS, beside the count. Two date inputs
+            render in the machine's own format and are read as boxes rather than
+            as a period; "Jul 1 – Jul 31, 2026" is the thing somebody checks
+            against the document in their other hand. */}
         <span className="fin-recon-count">
+          <b className="fin-recon-window">
+            {win.bounded ? dayRangeLabel(win.from, win.to) : 'Every night imported'}
+          </b>
           {rows.length} night{rows.length === 1 ? '' : 's'}
         </span>
       </div>
@@ -873,20 +1123,522 @@ function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element
       </div>
 
       <p className="fin-rates-lead">
-        Set the two dates to whatever window a statement covers and the total row is the figure to
-        compare against it. Whatnot&rsquo;s own statement periods do not always run to a calendar
-        month, so matching the window is the first thing to check when two numbers disagree.
+        Pick a saved figure above and the window becomes exactly the days that figure is about.
+        That is the point of the list: matching the window by remembering to is the step that keeps
+        getting skipped, and every comparison below is worthless when it is. Whatnot&rsquo;s own
+        statement periods do not always run to a calendar month, so the dates stay editable by
+        hand, and the total row is the figure to compare.
       </p>
 
-      <StatementCheck totals={totals} taxRate={effTax(periods, to || from)} />
+      <RevenueCheck
+        totals={totals}
+        win={win}
+        terms={terms}
+        statements={statements}
+        canManage={canManage}
+        onLastMonth={() => setRange(lastFullMonth())}
+        onSaved={onSaved}
+        onStatements={setStatements}
+      />
+
+      <StatementCheck
+        totals={totals}
+        win={win}
+        taxRate={terms.pinned.taxRate}
+        onLastMonth={() => setRange(lastFullMonth())}
+      />
     </section>
   )
 }
 
-/** The tax rate in force at one end of the window, or the default. */
-function effTax(periods: WhatnotRatePeriod[], day: string): number {
-  const p = day ? periods.find((x) => x.fromDate <= day && (!x.toDate || x.toDate >= day)) : null
-  return p ? p.taxRate : DEFAULT_FEE_RATES.taxRate
+/* `effTax` USED TO LIVE HERE, and it was the same defect twice over. It read the
+   tax rate off `to || from` — the window's LAST day, and nothing at all when the
+   boxes were blank, which was the default — so a fit over July could be pinned
+   on terms that were never in force during July, and on a blank window it fell
+   straight through to the built-in defaults. Both panels now take their terms
+   from `pinTermsFor`, which pins the night that carried the most money and is
+   the same rule the store's own `revenueCheck` applies. */
+
+/**
+ * THE WINDOW THIS SCREEN OPENS ON: the last full calendar month.
+ *
+ * Built from the range bar's OWN preset rather than from a second copy of the
+ * arithmetic, because two definitions of "last month" drift and the day they do,
+ * this screen and the Streaming tab report different months under the same
+ * words. It is the only preset that is a CLOSED window, which is what a
+ * statement always is.
+ *
+ * The blank/blank fallback exists only for the case where that preset is ever
+ * renamed away. Blank used to be the default here and it was a lie; it is no
+ * longer, because every panel that asserts agreement with an outside document
+ * now asks `checkWindow` first and refuses an open window outright. So the worst
+ * this degrades to is "the panels ask for dates", not "the panels compare July
+ * against all time".
+ */
+function lastFullMonth(): DayRange {
+  const preset = RANGE_PRESETS.find((p) => p.key === 'lastMonth')
+  return preset ? preset.build() : { from: '', to: '' }
+}
+
+/**
+ * WHY A PANEL IS REFUSING TO COMPARE ANYTHING, and the one click out of it.
+ *
+ * Shared by both checks so the refusal reads identically wherever it appears —
+ * the sentence itself comes from `checkWindow`, which has five of them and knows
+ * which one applies. A panel that computed over all time while looking like it
+ * computed over a month is worse than a panel that refuses, and this is what
+ * refusing looks like.
+ */
+function WindowRefusal({
+  win,
+  onLastMonth
+}: {
+  win: CheckWindow
+  onLastMonth: () => void
+}): JSX.Element {
+  const month = lastFullMonth()
+  return (
+    <Note tone="warn" icon="AlertTriangle">
+      <b>These dates cannot be checked against a document.</b>
+      <p>{win.problem}</p>
+      {!!month.from && !!month.to && (
+        <Button size="sm" variant="secondary" icon="CalendarRange" onClick={onLastMonth}>
+          Use last month &mdash; {dayRangeLabel(month.from, month.to)}
+        </Button>
+      )}
+    </Note>
+  )
+}
+
+/**
+ * ONE NUMBER IS ENOUGH: type what the platform says the window sold.
+ *
+ * ## Why this exists beside the three-figure check below
+ *
+ * `StatementCheck` needs sales, commission and processing off a real statement
+ * and solves both rates at once. It is the better tool when somebody is holding
+ * that document. They usually are not. Whatnot's dashboard states SALES and
+ * nothing else, and a 1099 states gross and nothing else — so the case that
+ * actually comes up had nowhere to go, and the owner watching revenue run
+ * $15-25k a month over Whatnot's own figure had exactly one number to offer.
+ *
+ * One is enough because the window is not three unknowns. The ledger already
+ * supplies two of them: the net is a RECORD — the column that was uploaded, the
+ * one that reconciles to the bank — and so is the order count. Only the
+ * commission is unknown, and one equation solves it. See `fitFromGross`.
+ *
+ * ## It solves the commission and pins the rest
+ *
+ * Because the commission is the term that actually moves: negotiated, revised,
+ * and different by what is being sold. The card percentage is a processor's
+ * published number a seller does not negotiate, so pinning the term that does
+ * not vary is what makes the answer a point rather than a line.
+ *
+ * ## NOTHING IS SAVED BY LOOKING
+ *
+ * Running the check changes no figure anywhere. Saving the fitted rate is a
+ * separate button and a separate decision, because it re-prices every night in
+ * the window the moment it lands — and somebody who was only checking must not
+ * discover that by finding their history moved.
+ */
+function RevenueCheck({
+  totals,
+  win,
+  terms,
+  statements,
+  canManage,
+  onLastMonth,
+  onSaved,
+  onStatements
+}: {
+  totals: { netPaid: number; ledgerNet: number; grossSales: number; orders: number }
+  /** The window, ALREADY JUDGED. Nothing below is drawn until it is bounded. */
+  win: CheckWindow
+  /** The card terms held fixed while the commission is solved, pinned on the
+   *  heaviest night in the window by the shared rule. */
+  terms: PinnedTermsFor
+  /** Every saved figure, or null while the read is in flight. */
+  statements: WhatnotStatement[] | null
+  canManage: boolean
+  /** Sets the window to the last full month, for the refusal below. */
+  onLastMonth: () => void
+  onSaved: (next: WhatnotRatePeriod[]) => void
+  /** Hands the re-read list of saved figures up after this panel saves one. */
+  onStatements: (next: WhatnotStatement[]) => void
+}): JSX.Element {
+  const toast = useToast()
+  const [stated, setStated] = useState('')
+  const [paidOut, setPaidOut] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  // FOR DISPLAY ONLY. Zero on anything unparseable, which keeps a half-typed box
+  // from blanking the panel while somebody is still typing in it.
+  const num = (v: string): number => {
+    const x = Number((v || '').replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(x) ? x : 0
+  }
+  // FOR STORING. NaN on anything unparseable, so the validator refuses it rather
+  // than the app recording a figure nobody stated. The two must not be merged:
+  // the panel wants a number it can render mid-keystroke, and the database wants
+  // a refusal. See saveFigure, and StatementModal's copy of this same rule.
+  const persisted = (v: string): number => {
+    const t = (v || '').replace(/[^0-9.-]/g, '').trim()
+    return t === '' ? Number.NaN : Number(t)
+  }
+  const filled = stated.trim() !== ''
+
+  // The terms held fixed come from the NIGHT THAT CARRIED THE MOST MONEY in this
+  // window, not from one of its ends. See `pinTermsFor` in @shared/pnlRecon for
+  // the defect that rule replaced: pinning on the last day meant a quiet Tuesday
+  // closing the month decided how a $60,000 Saturday was fitted, and on the old
+  // blank window it pinned July's fit on today's rates.
+  const pinned = terms.pinned
+
+  /**
+   * WHERE THIS WINDOW ALREADY STANDS AGAINST WHATNOT, BEFORE ANYTHING IS TYPED.
+   *
+   * The typed boxes below are the "we have not saved one yet" path, and they
+   * always were the whole panel — which meant the answer disappeared the moment
+   * the screen was closed, and the next person typed the same figure again from
+   * the same PDF. A saved figure makes the comparison a STANDING fact about
+   * these days, and this is the sentence that reports it.
+   *
+   * The sentence is built in the contract, not here. A component assembling it
+   * out of four booleans and two numbers eventually assembles one the numbers do
+   * not support, and this screen has already lied twice.
+   */
+  const standing = useMemo(
+    () => revenueStanding(win, statements ?? [], totals.grossSales),
+    [win, statements, totals.grossSales]
+  )
+
+  const fit = useMemo(
+    () =>
+      filled
+        ? fitFromGross(
+            num(stated),
+            { netPaid: totals.netPaid, derivedRevenue: totals.grossSales, orders: totals.orders },
+            pinned
+          )
+        : null,
+    [filled, stated, totals, pinned]
+  )
+  const verdict = fit ? grossFitVerdict(fit) : null
+
+  /**
+   * THE UPSTREAM CHECK, and it runs whether or not a sales figure was typed.
+   *
+   * Both sides are RECORDED — the ledger's own Amount column and the money the
+   * platform actually sent — so unlike the fit it contains no fee schedule and
+   * cannot be wrong for a fee schedule's reasons. When it disagrees, no
+   * commission rate can be right, because the app is holding a different set of
+   * orders from the one the statement is about. See payoutCheck.
+   */
+  const paid = useMemo(
+    () => (paidOut.trim() === '' ? null : payoutCheck(totals.ledgerNet, num(paidOut))),
+    [paidOut, totals.ledgerNet]
+  )
+
+  const applyRate = async (): Promise<void> => {
+    if (!fit?.solvable || !win.bounded) return
+    setBusy(true)
+    try {
+      const res = await finance.saveRate({
+        fromDate: win.from,
+        toDate: win.to,
+        rate: fit.fittedCommissionRate,
+        taxRate: pinned.taxRate,
+        processingRate: pinned.processingRate,
+        processingFlatCents: pinned.processingFlatCents,
+        note: `Fitted to a stated ${fmtMoney(fit.statedGross)}`
+      })
+      if (!res.ok) {
+        toast.error(resultError(res, 'That rate could not be saved.'))
+        return
+      }
+      onSaved(res.data ?? [])
+      toast.success('Saved. Every night in this window is now priced on those terms.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * KEEP THE FIGURE, so nobody types it off the same PDF twice.
+   *
+   * It saves the window ON SCREEN, which is exactly the pair of dates the figure
+   * was just compared against — so a saved figure can never end up filed under a
+   * period it is not about. That is only true because the window is guaranteed
+   * bounded by the time this button exists; on the old blank default this would
+   * have stored a figure against no dates at all.
+   *
+   * The payout goes with it when one was typed. Null when it was not, which is
+   * ordinary: a dashboard reading states sales alone.
+   */
+  const saveFigure = async (): Promise<void> => {
+    if (!filled || !win.bounded) return
+    setSaving(true)
+    try {
+      const input: StatementInput = {
+        fromDate: win.from,
+        toDate: win.to,
+        // NOT the display `num` above. That one returns 0 for anything it cannot
+        // parse, which is right for a figure being shown and WRONG for one being
+        // stored: typing "n/a" in the payout box would persist a stated payout of
+        // $0.00, the validator would accept it (finite, >= 0, <= gross), and the
+        // payout check would then read it as the platform having paid nothing and
+        // report that there is nothing to chase. StatementModal's own `num` has
+        // carried the NaN rule and the reason for it all along; this path was
+        // added later and did not inherit it.
+        statedGross: persisted(stated),
+        statedPayout: paidOut.trim() === '' ? null : persisted(paidOut),
+        note: 'Typed in on Fees & rates'
+      }
+      const res = await finance.saveStatement(input)
+      if (!res.ok || !res.data) {
+        toast.error(resultError(res, 'That figure could not be saved.'))
+        return
+      }
+      onStatements(res.data)
+      toast.success('Saved. This window now carries Whatnot\u2019s own figure beside it.')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'That figure could not be saved.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // THE REFUSAL, and it comes before every figure below it. This panel compares
+  // one month's stated sales against what the app derives for the same days, and
+  // an open end means "the same days" is the whole ledger. Every hook above has
+  // already run, so the early return cannot change their order.
+  if (!win.bounded) {
+    return (
+      <section className="fin-fit" aria-label="Check revenue against a stated figure">
+        <div className="fin-head-top">
+          <h3>Check revenue against Whatnot</h3>
+          <span className="fin-head-scope">Needs a window a statement could cover</span>
+        </div>
+        <WindowRefusal win={win} onLastMonth={onLastMonth} />
+      </section>
+    )
+  }
+
+  return (
+    <section className="fin-fit" aria-label="Check revenue against a stated figure">
+      <div className="fin-head-top">
+        <h3>Check revenue against Whatnot</h3>
+        <span className="fin-head-scope">One figure, and it solves the commission</span>
+      </div>
+      <p className="fin-rates-lead">
+        Revenue on the Streaming tab is <b>worked out, not recorded</b> &mdash; Whatnot states only
+        what it paid, and the price a buyer bid is that figure with the fees added back. Type what
+        Whatnot says <b>{dayRangeLabel(win.from, win.to)}</b> sold and this works out the commission
+        that would reproduce it. Nothing changes until you choose to save it.
+      </p>
+
+      {/* WHERE THESE DAYS ALREADY STAND, said before the boxes. Somebody who
+          saved the figure last month should not have to retype it to find out,
+          and somebody who never saved one is told that is what is missing rather
+          than being shown an empty comparison. On a build whose bridge predates
+          saved figures there is nothing to stand on and no way to save one, so
+          the sentence is not drawn at all rather than telling somebody to press
+          a button that is not there. */}
+      {statementsReady && statements !== null && (
+        <Note
+          tone={
+            standing.state === 'compared'
+              ? 'good'
+              : standing.state === 'disagrees'
+                ? 'danger'
+                : 'info'
+          }
+          icon={
+            standing.state === 'compared'
+              ? 'Check'
+              : standing.state === 'disagrees'
+                ? 'AlertTriangle'
+                : 'Info'
+          }
+        >
+          <b>
+            {standing.state === 'never'
+              ? 'No figure from Whatnot has ever been saved'
+              : standing.state === 'stale'
+                ? 'No saved figure covers these days'
+                : standing.state === 'compared'
+                  ? 'Compared with Whatnot\u2019s own figure'
+                  : 'These days do not agree with Whatnot'}
+          </b>
+          <p>{standing.sentence}</p>
+        </Note>
+      )}
+
+      <div className="fin-fit-inputs">
+        <label>
+          <span>Whatnot says this window sold</span>
+          <input
+            className="input"
+            inputMode="decimal"
+            placeholder="306977.00"
+            value={stated}
+            onChange={(e) => setStated(e.target.value)}
+          />
+        </label>
+        {/* THE PAYOUT, beside the sales figure and answering a different
+            question. Sales is a total Whatnot computed; the payout is money that
+            moved, and the app has a figure of the same kind. Optional, because a
+            dashboard reading states sales alone — but when it is to hand it is
+            the more useful of the two, and it is checked first. */}
+        <label>
+          <span>
+            And paid out <span className="fin-fit-opt">optional</span>
+          </span>
+          <input
+            className="input"
+            inputMode="decimal"
+            placeholder="369362.53"
+            value={paidOut}
+            onChange={(e) => setPaidOut(e.target.value)}
+          />
+        </label>
+      </div>
+
+      {/* KEEPING IT IS A SEPARATE PRESS from checking it, the same way saving a
+          fitted rate is. Checking changes nothing; saving files a figure against
+          these exact dates that every later comparison will be drawn from. */}
+      {statementsReady && canManage && filled && (
+        <div className="fin-fit-actions">
+          <Button variant="secondary" icon="Save" loading={saving} onClick={() => void saveFigure()}>
+            Save this figure for {dayRangeLabel(win.from, win.to)}
+          </Button>
+          <span className="fin-head-scope">
+            Keeps it in the list above, so this window comes with Whatnot&rsquo;s own number next
+            time instead of being typed off the same document again.
+          </span>
+        </div>
+      )}
+
+      {/* BEFORE the fit, always. A gap here means the app is holding the wrong
+          ORDERS, and a commission fitted on top of that would be a rate invented
+          to paper over a window that does not line up. */}
+      {paid && (
+        <Note
+          tone={paid.material ? 'danger' : paid.gap === 0 ? 'good' : 'warn'}
+          icon={paid.material ? 'AlertTriangle' : 'Check'}
+        >
+          <b>
+            {paid.material
+              ? 'Start here — the ledger and the payout do not agree'
+              : 'The ledger matches what was paid out'}
+          </b>
+          <p>{paid.sentence}</p>
+          <table className="data fin-fit-table">
+            <tbody>
+              <tr>
+                <th scope="row">Every row you uploaded, added up</th>
+                <td className="num"><Money value={paid.ledgerNet} /></td>
+              </tr>
+              <tr>
+                <th scope="row">Whatnot paid out</th>
+                <td className="num"><Money value={paid.statedPayout} /></td>
+              </tr>
+              <tr className={paid.material ? 'is-bad' : 'is-ok'}>
+                <th scope="row">Out by</th>
+                <td className="num"><Money value={paid.gap} strong /></td>
+              </tr>
+            </tbody>
+          </table>
+        </Note>
+      )}
+
+      {fit && verdict && (
+        <>
+          <Note
+            tone={verdict.tone === 'good' ? 'good' : verdict.tone === 'bad' ? 'danger' : 'warn'}
+            icon={verdict.tone === 'good' ? 'Check' : 'AlertTriangle'}
+          >
+            <b>{verdict.headline}</b>
+            <p>{verdict.detail}</p>
+          </Note>
+
+          {/* ONE FITTED COMMISSION ASSUMES ONE SET OF CARD TERMS, and this
+              window did not have one. The fit is still the best single answer
+              available; saying so costs a sentence, and letting somebody save an
+              average of two regimes believing it was the rate either of them
+              charged costs a re-priced month. */}
+          {fit.solvable && terms.mixedTerms && (
+            <Note tone="warn" icon="AlertTriangle">
+              <b>These nights were not all priced on the same card terms.</b>
+              <p>
+                The terms held fixed are the ones that priced{' '}
+                {terms.pinnedDay ? compactDayLabel(terms.pinnedDay) : 'the heaviest night'} — the
+                night in this window that carried the most money. The commission below is therefore
+                an average across two sets of terms rather than the rate either of them charged.
+              </p>
+            </Note>
+          )}
+
+          {fit.solvable && (
+            <table className="data fin-fit-table">
+              <tbody>
+                <tr>
+                  <th scope="row">Revenue the app shows</th>
+                  <td className="num"><Money value={fit.derivedRevenue} /></td>
+                </tr>
+                <tr>
+                  <th scope="row">Whatnot says</th>
+                  <td className="num"><Money value={fit.statedGross} /></td>
+                </tr>
+                <tr className={Math.abs(fit.revenueGap) < 1 ? 'is-ok' : 'is-bad'}>
+                  <th scope="row">Out by</th>
+                  <td className="num"><Money value={fit.revenueGap} strong /></td>
+                </tr>
+                {/* THE ROW THAT TELLS A RATE ERROR FROM A PER-ORDER ONE. A
+                    commission error scales with the money; a flat charge scales
+                    with the ORDERS. Two windows of different sizes that agree on
+                    this figure are being broken by the same per-order term. */}
+                {fit.perOrderGap !== null && Math.abs(fit.revenueGap) >= 1 && (
+                  <tr>
+                    <th scope="row">Per order, across {fit.orders.toLocaleString()} orders</th>
+                    <td className="num mono">
+                      {fit.perOrderGap < 0 ? '\u2212' : ''}
+                      {Math.round(Math.abs(fit.perOrderGap) * 100)}¢
+                    </td>
+                  </tr>
+                )}
+                <tr className="fin-fit-fit">
+                  <th scope="row">Commission that reproduces it</th>
+                  <td className="num mono">{ratePct(fit.fittedCommissionRate)}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+
+          {fit.solvable && Math.abs(fit.revenueGap) >= 1 && (
+            <div className="fin-fit-actions">
+              <Button variant="primary" loading={busy} onClick={() => void applyRate()}>
+                Use {ratePct(fit.fittedCommissionRate)} for {compactDayLabel(win.from)} &ndash;{' '}
+                {compactDayLabel(win.to)}
+              </Button>
+              <span className="fin-head-scope">
+                Saves a rate period over exactly these dates and re-prices every night in it.
+              </span>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+/** "$306,977.00" — for a note somebody will read on a saved rate period. */
+function fmtMoney(v: number): string {
+  return `$${Math.abs(v).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`
 }
 
 /**
@@ -910,10 +1662,19 @@ function effTax(periods: WhatnotRatePeriod[], day: string): number {
  */
 function StatementCheck({
   totals,
-  taxRate
+  win,
+  taxRate,
+  onLastMonth
 }: {
   totals: { netPaid: number; grossSales: number; orders: number }
+  /** The window, ALREADY JUDGED. Nothing below is drawn until it is bounded. */
+  win: CheckWindow
+  /** The tax rate the fit holds fixed, pinned on the heaviest night by
+   *  `pinTermsFor` rather than read off whichever end of the window happened to
+   *  be filled in. */
   taxRate: number
+  /** Sets the window to the last full month, for the refusal below. */
+  onLastMonth: () => void
 }): JSX.Element {
   const [sales, setSales] = useState('')
   const [commission, setCommission] = useState('')
@@ -942,6 +1703,23 @@ function StatementCheck({
 
   const verdict = fit ? fitVerdict(fit) : null
 
+  // THE REFUSAL. This panel's first move is to compare the statement's own net
+  // against the ledger's, and an open end makes that "one statement against
+  // every night ever imported" — which fails `sameWindow` by the size of the
+  // rest of the ledger and hides everything below it for a reason that has
+  // nothing to do with the document. Every hook above has already run.
+  if (!win.bounded) {
+    return (
+      <section className="fin-fit" aria-label="Check against a statement">
+        <div className="fin-head-top">
+          <h3>Check against a statement</h3>
+          <span className="fin-head-scope">Needs a window a statement could cover</span>
+        </div>
+        <WindowRefusal win={win} onLastMonth={onLastMonth} />
+      </section>
+    )
+  }
+
   return (
     <section className="fin-fit" aria-label="Check against a statement">
       <div className="fin-head-top">
@@ -949,9 +1727,10 @@ function StatementCheck({
         <span className="fin-head-scope">Solve the rate from the document</span>
       </div>
       <p className="fin-rates-lead">
-        Copy the three figures off a Whatnot statement for the <b>same window as the dates above</b>
-        , and this works out what the terms must have been to produce them. Nothing is saved until
-        you choose to.
+        Copy the three figures off a Whatnot statement covering{' '}
+        <b>{dayRangeLabel(win.from, win.to)}</b> &mdash; the window on screen, and it has to be the
+        same one &mdash; and this works out what the terms must have been to produce them. Nothing
+        is saved until you choose to.
       </p>
 
       <div className="fin-fit-inputs">
@@ -1054,5 +1833,843 @@ function StatementCheck({
         </>
       )}
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// What Whatnot states
+// ---------------------------------------------------------------------------
+
+/**
+ * THE FIGURES WHATNOT ITSELF PUBLISHED, KEPT — AND THE WINDOW THEY ARE ABOUT.
+ *
+ * ## Why a list and not another pair of boxes
+ *
+ * Every check on this screen compares something the app derived against
+ * something a document says, and the document said it ABOUT A PERIOD. The two
+ * facts travel together and were being taken apart: the figure went in a box,
+ * the period went in two date inputs somebody typed from memory, and nothing
+ * anywhere held them to each other. That is how a July figure ends up checked
+ * against all time, which is what this screen did on every render it ever drew.
+ *
+ * Picking a row here sets the night-by-night window to that statement's own
+ * dates. The comparison is then correct BY CONSTRUCTION rather than by somebody
+ * remembering to retype two dates — and remembering is the step that keeps
+ * getting skipped, because nothing on screen ever complained when it was.
+ *
+ * ## Why it looks exactly like the rate periods above it
+ *
+ * Because it is the same kind of thing: a figure, the span it applies to, a note
+ * about where it came from, and the two actions that maintain it. Same markup,
+ * same vocabulary, same permission gate. A second visual language for the second
+ * list of dated figures on one screen would be a thing to learn for no reason.
+ *
+ * NEWEST FIRST, AND NOT RE-SORTED HERE. `listStatements` orders by from_date
+ * descending because a reconciliation starts from the thing that just landed.
+ * Sorting again in the renderer would be a second opinion about that order, and
+ * the day the two differ this list and the store disagree about which figure is
+ * the current one.
+ */
+function StatementList({
+  statements,
+  canManage,
+  activeFrom,
+  activeTo,
+  ledgerNetFor,
+  ledgerPartsFor,
+  windowFiguresFor,
+  taxRate,
+  onPick,
+  onSaved
+}: {
+  /** Null while the read is in flight — drawn as nothing, not as "none saved". */
+  statements: WhatnotStatement[] | null
+  canManage: boolean
+  /** The window on screen, so the row it came from can say so. */
+  activeFrom: string
+  activeTo: string
+  /** What the ledger holds for any window, so the form can check itself. */
+  ledgerNetFor: (from: string, to: string) => number | null
+  /** The same figure in buckets, for when it disagrees with the document. */
+  ledgerPartsFor: (from: string, to: string) => LedgerParts | null
+  /** The app's own figures for a window — what a fit is solved against. */
+  windowFiguresFor: (from: string, to: string) => WindowFigures | null
+  /** The tax rate the fit holds fixed, pinned on the heaviest night. */
+  taxRate: number
+  onPick: (statement: WhatnotStatement) => void
+  onSaved: (next: WhatnotStatement[]) => void
+}): JSX.Element | null {
+  const toast = useToast()
+  const [editing, setEditing] = useState<WhatnotStatement | 'new' | null>(null)
+  const [deleting, setDeleting] = useState<WhatnotStatement | null>(null)
+  const [fitting, setFitting] = useState<WhatnotStatement | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const remove = useCallback(async () => {
+    if (!deleting) return
+    setBusy(true)
+    try {
+      const res = await finance.deleteStatement(deleting.id)
+      if (!res.ok || !res.data) {
+        toast.error(resultError(res, 'That figure could not be removed.'))
+        return
+      }
+      onSaved(res.data)
+      setDeleting(null)
+      // Removing a figure removes EVIDENCE, not money: nothing the app derives
+      // moves, the window simply stops having an outside number beside it.
+      toast.success('Figure removed. Nothing the app derives changes.')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'That figure could not be removed.')
+    } finally {
+      setBusy(false)
+    }
+  }, [deleting, onSaved, toast])
+
+  if (!statementsReady) return null
+  if (statements === null) return null
+
+  return (
+    <section className="fin-stmt-list" aria-label="What Whatnot states">
+      <div className="fin-imports-head">
+        <span className="fin-section-title">
+          <Icon name="ReceiptText" size={15} />
+          What Whatnot states
+          <span className="fin-count">{statements.length}</span>
+        </span>
+        {canManage && (
+          <Button size="sm" variant="secondary" icon="Plus" onClick={() => setEditing('new')}>
+            Add a figure
+          </Button>
+        )}
+      </div>
+
+      <p className="fin-rates-lead">
+        The only figures on this screen that came from <b>outside the app</b>. Pick one and the
+        window below becomes exactly the days it covers, so what the table totals and what Whatnot
+        stated are about the same period without anybody having to check that they are.
+      </p>
+
+      {statements.length === 0 && (
+        <p className="fin-blank-gate">
+          Nothing saved yet. Type a figure into the revenue check below and press{' '}
+          <b>Save this figure</b>, or add one here from a statement or a 1099.
+        </p>
+      )}
+
+      {statements.map((st) => {
+        const active = st.fromDate === activeFrom && st.toDate === activeTo
+        return (
+          <article key={st.id} className={`fin-rate fin-stmt${active ? ' is-active' : ''}`}>
+            <div className="fin-rate-main">
+              <b className="fin-rate-figure mono">{fmtMoney(st.statedGross)}</b>
+              <span className="fin-rate-span">{spanLabel(st)}</span>
+              {active && <span className="fin-rate-tag">On screen</span>}
+            </div>
+            {/* THE PAYOUT IS PRINTED EVEN WHEN IT IS MISSING, because its absence
+                is the reason the one check that cannot be wrong for a fee
+                schedule's reasons never runs on this window. "Sales only" is a
+                fact worth seeing from the list. */}
+            <p className="fin-rate-terms mono">
+              {st.statedPayout === null
+                ? 'sales only — no payout stated'
+                : `paid out ${fmtMoney(st.statedPayout)}`}
+              {st.statedFees !== null && ` · fees ${fmtMoney(st.statedFees)}`}
+            </p>
+            {st.note && <p className="fin-rate-note">{st.note}</p>}
+            <div className="fin-rate-acts">
+              <button type="button" className="fin-more" onClick={() => onPick(st)}>
+                <Icon name="CalendarRange" size={14} />
+                Use these dates
+              </button>
+              {canManage && (
+                <>
+                  {/* Only offered when the document itemises the two lines the
+                      app models. Fitting a commission from a combined total
+                      would put the card charge inside it, and the rate would
+                      look right and reproduce the right revenue for the wrong
+                      reason until the day the card charge moved. */}
+                  {st.statedCommission !== null && st.statedProcessing !== null && (
+                    <button type="button" className="fin-more" onClick={() => setFitting(st)}>
+                      <Icon name="Percent" size={14} />
+                      Use these rates
+                    </button>
+                  )}
+                  <button type="button" className="fin-more" onClick={() => setEditing(st)}>
+                    <Icon name="Pencil" size={14} />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="fin-more is-danger"
+                    onClick={() => setDeleting(st)}
+                  >
+                    <Icon name="Trash2" size={14} />
+                    Remove
+                  </button>
+                </>
+              )}
+            </div>
+          </article>
+        )
+      })}
+
+      {!canManage && (
+        <p className="fin-blank-gate">
+          Saving a stated figure needs the <b>Manage finance data</b> permission. Picking a window
+          from the list does not.
+        </p>
+      )}
+
+      {fitting && (
+        <ApplyRatesModal
+          statement={fitting}
+          app={windowFiguresFor(fitting.fromDate, fitting.toDate)}
+          taxRate={taxRate}
+          onClose={() => setFitting(null)}
+        />
+      )}
+
+      {editing && (
+        <StatementModal
+          statement={editing === 'new' ? null : editing}
+          defaultFrom={activeFrom}
+          defaultTo={activeTo}
+          ledgerNetFor={ledgerNetFor}
+          ledgerPartsFor={ledgerPartsFor}
+          onClose={() => setEditing(null)}
+          onSaved={(next) => {
+            onSaved(next)
+            setEditing(null)
+          }}
+        />
+      )}
+
+      {deleting && (
+        <Modal
+          title="Remove this stated figure?"
+          onClose={() => (busy ? undefined : setDeleting(null))}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setDeleting(null)} disabled={busy}>
+                Keep it
+              </Button>
+              <Button variant="danger" icon="Trash2" loading={busy} onClick={() => void remove()}>
+                Remove the figure
+              </Button>
+            </>
+          }
+        >
+          <p className="fin-confirm-lead">
+            Whatnot&rsquo;s <b>{fmtMoney(deleting.statedGross)}</b> for{' '}
+            <b>{spanLabel(deleting)}</b> goes.
+          </p>
+          <p className="fin-confirm-lead">
+            No figure the app derives changes. Those days simply stop having anything from outside
+            the app to be checked against, and the revenue check goes back to asking for one.
+          </p>
+        </Modal>
+      )}
+    </section>
+  )
+}
+
+/**
+ * SOLVE THE TERMS THIS MONTH IMPLIES, AND PUT THEM ON THE CALENDAR.
+ *
+ * The one control on this screen that MOVES A NUMBER. Everything else here
+ * records what the platform said or works out what it implies; this writes a
+ * rate period, and every night in its span is re-priced the next time the view
+ * is built — the tiles, the calendar, the statement, the week and month rollups
+ * and per-break profit, all of them, because the rate is what they already read.
+ *
+ * ## Why this IS the per-night distribution
+ *
+ * The owner asked for the gap between projected and actual to be spread over the
+ * nights in proportion to what each contributed. Re-pricing at a solved rate
+ * does exactly that and by the same arithmetic — a night's fee moves by the
+ * ratio of the new rate to the old, which is its share of the correction. The
+ * difference is only that a rate reaches everything, and a correction bolted on
+ * top would have to be taught to each screen in turn.
+ *
+ * ## Why it does not simply scale revenue
+ *
+ * Gross is DEFINED as the net Whatnot paid plus the modelled fees, and a
+ * checksum fails loudly if those three ever stop tying. Scaling revenue and fees
+ * by separate factors implies a payout the platform never sent, and the screen
+ * would go red saying the figures do not add up. Correcting the rate keeps the
+ * identity by construction.
+ *
+ * It is a confirm rather than a button because it is not reversible by pressing
+ * it again: the previous terms for these days were whatever period covered them,
+ * and this writes a new one over the top.
+ */
+function ApplyRatesModal({
+  statement,
+  app,
+  taxRate,
+  onClose
+}: {
+  statement: WhatnotStatement
+  /** Null when nothing is imported for the statement's days. */
+  app: WindowFigures | null
+  taxRate: number
+  onClose: () => void
+}): JSX.Element {
+  const toast = useToast()
+  const [busy, setBusy] = useState(false)
+
+  const solved: SolvedRates = useMemo(
+    () =>
+      app
+        ? solveRatesFor(statement, app, taxRate)
+        : {
+            fit: null,
+            period: null,
+            problem:
+              'Nothing is imported for the days this statement covers, so there is nothing to solve a rate against.'
+          },
+    [statement, app, taxRate]
+  )
+
+  const apply = async (): Promise<void> => {
+    if (!solved.period) return
+    setBusy(true)
+    try {
+      const res = await finance.saveRate(solved.period)
+      if (!res.ok) {
+        toast.error(resultError(res, 'Those terms could not be saved.'))
+        return
+      }
+      toast.success(
+        `${dayRangeLabel(statement.fromDate, statement.toDate)} is now priced at ${ratePct(solved.period.rate)} commission.`
+      )
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Those terms could not be saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="Use the rates this statement implies"
+      subtitle={dayRangeLabel(statement.fromDate, statement.toDate)}
+      onClose={() => (busy ? undefined : onClose())}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon="Check"
+            loading={busy}
+            disabled={!solved.period}
+            onClick={() => void apply()}
+          >
+            Price these nights at these terms
+          </Button>
+        </>
+      }
+    >
+      {solved.problem ? (
+        <Note tone="danger" icon="AlertTriangle" role="alert">
+          <p>{solved.problem}</p>
+        </Note>
+      ) : (
+        solved.period &&
+        solved.fit && (
+          <>
+            <div className="fin-fit-solved">
+              <p>
+                <span>Commission</span>
+                <b>{ratePct(solved.period.rate)}</b>
+              </p>
+              <p>
+                <span>Card processing</span>
+                <b>{ratePct(solved.period.processingRate)}</b>
+              </p>
+              <p>
+                <span>Revenue for these nights becomes</span>
+                <b>{fmtMoney(solved.fit.refitRevenue)}</b>
+              </p>
+            </div>
+            <p className="fin-confirm-lead">
+              Every night from <b>{dayRangeLabel(statement.fromDate, statement.toDate)}</b> is
+              re-priced at these terms. Each night moves by its own share of the correction, because
+              the rate is charged on what that night sold — which is the same split as spreading the
+              difference by what each contributed, and it reaches the calendar, the statement and
+              per-break profit rather than only the tiles.
+            </p>
+            <p className="fin-confirm-lead">
+              <b>Net profit does not move by this.</b> The fees come off revenue and the bottom line
+              subtracts them again, so correcting the rate changes the top line and the fee line by
+              the same amount. What it fixes is the two figures that were guesses.
+            </p>
+            {Math.abs(solved.fit.residual) >= 1 && (
+              <Note tone="warn" icon="Info">
+                <p>
+                  Re-priced at these terms the window works back to{' '}
+                  <b>{fmtMoney(solved.fit.refitRevenue)}</b> against the {fmtMoney(statement.statedGross)}{' '}
+                  stated — <b>{fmtMoney(solved.fit.residual)}</b> over. The card charge was fitted as
+                  a percentage with no per-order flat fee, so a leftover of this size is what a flat
+                  charge would look like.
+                </p>
+              </Note>
+            )}
+          </>
+        )
+      )}
+    </Modal>
+  )
+}
+
+/**
+ * One money box on the month-end form.
+ *
+ * Nine of these, so it is a component rather than nine copies: the boxes differ
+ * only in their label and their placeholder, and nine hand-written copies is
+ * nine places for one to be wired to the wrong piece of state — a mistake that
+ * would not throw, because every one of these figures is a plausible amount in
+ * any of the others' places.
+ */
+function MoneyLine({
+  label,
+  value,
+  onChange,
+  hint,
+  strong
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  hint?: string
+  /** The two this app MODELS rather than reads. They are what the fit solves. */
+  strong?: boolean
+}): JSX.Element {
+  return (
+    <label className={`fin-stmt-line${strong ? ' is-modelled' : ''}`}>
+      <span className="fin-stmt-line-label">
+        {label}
+        {hint ? <em>{hint}</em> : null}
+      </span>
+      <Input
+        type="text"
+        inputMode="decimal"
+        placeholder="0.00"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  )
+}
+
+/**
+ * Add or edit one stated figure — Whatnot's month-end summary, line for line.
+ *
+ * ## The form is the document
+ *
+ * Two lists with a total each, in the platform's own order and its own words,
+ * because the person filling this in is reading one screen and typing into
+ * another and every re-grouping on the way is a chance to put a figure in the
+ * wrong box. The two totals are computed and shown as they are typed, so a
+ * mistyped line is caught against the document's own printed total while the
+ * document is still open.
+ *
+ * ## The line that is worth the whole form
+ *
+ * Earnings minus Fees and costs is the money the platform actually sent, and it
+ * is the ONLY figure on the document this app holds an independent copy of — the
+ * ledger records each row's amount rather than deriving it. So the form can
+ * answer, before anything is saved and before any question of rates arises,
+ * whether the app is holding the right set of orders at all. That is the check
+ * the owner has been missing: a gap here is rows, a gap anywhere else is rates,
+ * and until now nothing could tell them apart.
+ *
+ * ## Blank is not zero
+ *
+ * `Number('')` is 0, and a stated zero is a claim — that the platform charged
+ * nothing under that heading, or that the window sold nothing. Every optional
+ * box reaches the bridge as null when it is empty, and the required one is
+ * refused rather than smoothed. NaN for a blank box is deliberate for exactly
+ * this reason, here and in the rate form above.
+ */
+function StatementModal({
+  statement,
+  defaultFrom,
+  defaultTo,
+  ledgerNetFor,
+  ledgerPartsFor,
+  onClose,
+  onSaved
+}: {
+  statement: WhatnotStatement | null
+  /** The window on screen. A new figure is nearly always about the days being
+   *  looked at, so the form opens on them rather than on today. */
+  defaultFrom: string
+  defaultTo: string
+  /**
+   * What the LEDGER holds for a window — the sum of every attributed row's own
+   * amount, recorded and not derived. Passed in rather than fetched because the
+   * panel around this form has already built it, and a second read could answer
+   * differently from the table the operator is looking at.
+   */
+  ledgerNetFor: (from: string, to: string) => number | null
+  /** The same figure broken into buckets, for when the two do not agree. */
+  ledgerPartsFor: (from: string, to: string) => LedgerParts | null
+  onClose: () => void
+  onSaved: (next: WhatnotStatement[]) => void
+}): JSX.Element {
+  const toast = useToast()
+  const [busy, setBusy] = useState(false)
+  const text = (v: number | null | undefined): string =>
+    v === null || v === undefined ? '' : String(v)
+
+  const [fromDate, setFromDate] = useState(statement?.fromDate ?? defaultFrom ?? '')
+  const [toDate, setToDate] = useState(statement?.toDate ?? defaultTo ?? '')
+  const [note, setNote] = useState(statement?.note ?? '')
+
+  // One piece of state per printed line, keyed by the contract's own field name
+  // so the object handed to the bridge is built by spreading rather than by
+  // listing — the listing is what dropped the payout field once already.
+  const [lines, setLines] = useState<Record<string, string>>(() => ({
+    statedGross: text(statement?.statedGross),
+    statedTips: text(statement?.statedTips),
+    statedOtherIn: text(statement?.statedOtherIn),
+    statedCommission: text(statement?.statedCommission),
+    statedProcessing: text(statement?.statedProcessing),
+    statedShipping: text(statement?.statedShipping),
+    statedSurcharges: text(statement?.statedSurcharges),
+    statedRefunds: text(statement?.statedRefunds),
+    statedOtherOut: text(statement?.statedOtherOut)
+  }))
+  const set = (k: string) => (v: string): void => setLines((p) => ({ ...p, [k]: v }))
+
+  /** NaN for a blank box rather than 0 — see the note on this component. */
+  const num = (v: string): number => {
+    const t = (v || '').replace(/[^0-9.-]/g, '').trim()
+    return t === '' ? Number.NaN : Number(t)
+  }
+  const optional = (v: string): number | null => (v.trim() === '' ? null : num(v))
+
+  const input: StatementInput = useMemo(
+    () => ({
+      id: statement?.id,
+      fromDate,
+      toDate,
+      statedGross: num(lines.statedGross),
+      // A statement typed line by line has no separate total to state: the six
+      // lines ARE the total, and `statementTotals` adds them up. Sending one as
+      // well would be a second figure that can disagree with the first.
+      statedFees: null,
+      statedPayout: null,
+      statedTips: optional(lines.statedTips),
+      statedOtherIn: optional(lines.statedOtherIn),
+      statedCommission: optional(lines.statedCommission),
+      statedProcessing: optional(lines.statedProcessing),
+      statedShipping: optional(lines.statedShipping),
+      statedSurcharges: optional(lines.statedSurcharges),
+      statedRefunds: optional(lines.statedRefunds),
+      statedOtherOut: optional(lines.statedOtherOut),
+      note
+    }),
+    [statement?.id, fromDate, toDate, lines, note]
+  )
+
+  const totals = useMemo(() => statementTotals(input), [input])
+  const problem = statementProblem(input)
+
+  // THE COMPARISON, live. Both sides are recorded money — the platform's own
+  // arithmetic on one side, the ledger's Amount column on the other — so this
+  // says whether the right rows are held without assuming anything about rates.
+  const held = useMemo(
+    () => (isDayKey(fromDate) && isDayKey(toDate) && toDate >= fromDate ? ledgerNetFor(fromDate, toDate) : null),
+    [ledgerNetFor, fromDate, toDate]
+  )
+  const gap = totals.payout !== null && held !== null ? Math.round((totals.payout - held) * 100) / 100 : null
+  // Only worked out when it is needed, which is when they disagree — the
+  // breakdown is a diagnosis, and printing one under a figure that already ties
+  // is noise on every ordinary month.
+  const parts = useMemo(
+    () =>
+      gap !== null && Math.abs(gap) >= 1 && isDayKey(fromDate) && isDayKey(toDate)
+        ? ledgerPartsFor(fromDate, toDate)
+        : null,
+    [ledgerPartsFor, fromDate, toDate, gap]
+  )
+
+  const save = async (): Promise<void> => {
+    if (problem) return
+    setBusy(true)
+    try {
+      // The fees total IS stored, computed from the lines, because the reads
+      // that predate the itemised form still ask for it and a statement that
+      // itemises should not look emptier to them than one that does not.
+      const res = await finance.saveStatement({ ...input, statedFees: totals.feesTotal, statedPayout: totals.payout })
+      if (!res.ok || !res.data) {
+        toast.error(resultError(res, 'That figure could not be saved.'))
+        return
+      }
+      onSaved(res.data)
+      toast.success(`${fmtMoney(totals.earnings)} saved for ${dayRangeLabel(fromDate, toDate)}.`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'That figure could not be saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={statement ? 'Edit this stated figure' : 'Add what Whatnot states'}
+      // Wide, and the two lists sit side by side inside it, because the line
+      // worth the whole form is the payout comparison at the bottom — and in a
+      // single column it fell below the fold behind nine money boxes, which is
+      // the one place it cannot do its job from.
+      wide
+      className="modal-stmt"
+      onClose={() => (busy ? undefined : onClose())}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon="Check"
+            loading={busy}
+            disabled={!!problem}
+            onClick={() => void save()}
+          >
+            {statement ? 'Save the figure' : 'Add the figure'}
+          </Button>
+        </>
+      }
+    >
+      <div className="fin-rate-form">
+        {/* THE DATES ARE THE STATEMENT'S OWN PERIOD, not a calendar month. A
+            Whatnot period frequently does not start on the 1st, and a figure
+            filed under the wrong days is exactly the error every panel on this
+            screen was making before the list existed. */}
+        <Field
+          label="From"
+          hint="Inclusive. The first show night this document covers — as the document dates it, not as the calendar does."
+        >
+          <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+        </Field>
+        <Field label="To" hint="Inclusive — the last show night this document covers.">
+          <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+        </Field>
+      </div>
+
+      <div className="fin-stmt-groups">
+      <div className="fin-stmt-group">
+        <h4>Earnings</h4>
+        <MoneyLine label="Sales" value={lines.statedGross} onChange={set('statedGross')} />
+        <MoneyLine label="Tips" value={lines.statedTips} onChange={set('statedTips')} />
+        <MoneyLine
+          label="Other adjustments (+)"
+          value={lines.statedOtherIn}
+          onChange={set('statedOtherIn')}
+        />
+        <p className="fin-stmt-total">
+          <span>Earnings</span>
+          <b>{fmtMoney(totals.earnings)}</b>
+        </p>
+      </div>
+
+      <div className="fin-stmt-group">
+        <h4>Fees &amp; costs</h4>
+        {/* The first two are marked because they are the only two this app
+            MODELS. The four below them are already ledger rows it holds, so a
+            disagreement there means missing rows, not a wrong rate — which is
+            the whole reason the lines are typed separately. */}
+        <MoneyLine
+          label="Commission fees"
+          hint="the app models this"
+          strong
+          value={lines.statedCommission}
+          onChange={set('statedCommission')}
+        />
+        <MoneyLine
+          label="Payment processing fees"
+          hint="the app models this"
+          strong
+          value={lines.statedProcessing}
+          onChange={set('statedProcessing')}
+        />
+        <MoneyLine
+          label="Seller paid shipping &amp; handling"
+          value={lines.statedShipping}
+          onChange={set('statedShipping')}
+        />
+        <MoneyLine
+          label="Shipping surcharges and fees"
+          value={lines.statedSurcharges}
+          onChange={set('statedSurcharges')}
+        />
+        <MoneyLine label="Order refunds" value={lines.statedRefunds} onChange={set('statedRefunds')} />
+        <MoneyLine
+          label="Other adjustments (−)"
+          value={lines.statedOtherOut}
+          onChange={set('statedOtherOut')}
+        />
+        <p className="fin-stmt-total">
+          <span>Fees &amp; costs</span>
+          <b>{totals.feesTotal === null ? '—' : fmtMoney(totals.feesTotal)}</b>
+        </p>
+      </div>
+      </div>
+
+      {/* BEFORE THE NOTE, not after it. This is the sentence the form exists to
+          print, and a person who has just typed eleven figures stops reading at
+          the last box — so it goes where the eye already is. */}
+      {problem ? (
+        <Note tone="danger" icon="AlertTriangle" role="alert">
+          <p>{problem}</p>
+        </Note>
+      ) : (
+        <PayoutAgreement payout={totals.payout} held={held} gap={gap} parts={parts} />
+      )}
+
+      <Field label="Note" hint="Which document this came off — the statement, the dashboard, a 1099.">
+        <Input
+          type="text"
+          maxLength={200}
+          value={note}
+          placeholder="April month-end summary…"
+          onChange={(e) => setNote(e.target.value)}
+        />
+      </Field>
+
+    </Modal>
+  )
+}
+
+/**
+ * WHAT THE PLATFORM SENT, AGAINST WHAT THE LEDGER HOLDS.
+ *
+ * Both sides are recorded rather than modelled, so this comparison contains no
+ * fee schedule and cannot be wrong for the reasons a fitted rate can. It is the
+ * one question worth asking first: a gap here means the app is holding a
+ * different set of orders from the ones the document covers, and no rate — no
+ * matter how carefully solved — can fix that or even see it.
+ *
+ * The tolerance is a dollar, which is per-row rounding over a month. Anything
+ * larger is named in full rather than softened, because the size is the whole
+ * diagnosis and a sentence that says "close enough" about $9,000 is worse than
+ * no sentence.
+ */
+function PayoutAgreement({
+  payout,
+  held,
+  gap,
+  parts
+}: {
+  payout: number | null
+  held: number | null
+  gap: number | null
+  /** What the ledger figure is made of. Only supplied when they disagree. */
+  parts: LedgerParts | null
+}): JSX.Element {
+  if (payout === null) {
+    return (
+      <p className="fin-confirm-lead">
+        Saving this changes <b>no figure the app derives</b>. Fill in the fees and this will also
+        say whether the money Whatnot sent matches the money the ledger holds for these days.
+      </p>
+    )
+  }
+  if (held === null) {
+    return (
+      <p className="fin-confirm-lead">
+        Whatnot sent <b>{fmtMoney(payout)}</b> for this window. There is nothing imported for these
+        days to compare it against yet.
+      </p>
+    )
+  }
+  const agrees = gap !== null && Math.abs(gap) < 1
+  return (
+    <Note tone={agrees ? 'good' : 'warn'} icon={agrees ? 'Check' : 'AlertTriangle'}>
+      <b>
+        Whatnot sent {fmtMoney(payout)}; the ledger holds {fmtMoney(held)} for these days.
+      </b>
+      {agrees ? (
+        <p>
+          They agree, so the app is holding the right orders for this window. Anything the revenue
+          figure is out by from here is the <b>rates</b>, not the rows — which is the question the
+          fit below can answer.
+        </p>
+      ) : (
+        <>
+        <p>
+          They are <b>{fmtMoney(Math.abs(gap ?? 0))}</b> apart
+          {gap !== null && gap > 0 ? ' — the document is higher' : ' — the ledger is higher'}. Both
+          figures are recorded, not worked out, so no rate explains this: either the window covers
+          different days from the ones the document does, or the import is missing rows or holds
+          rows the document does not. Settle that before fitting anything.
+        </p>
+        {/* WHAT THE LEDGER FIGURE IS MADE OF. A total against a total says only
+            that they differ; this says where to look. Costs typed into this app
+            — the expenses panel, broken stock, a prize — are deliberately absent
+            from both the list and the total, because Whatnot never saw them. */}
+        {parts && (
+          <ul className="fin-ledger-parts">
+            <li>
+              <span>Sales, at what was paid</span>
+              <b>{fmtMoney(parts.sales)}</b>
+            </li>
+            {parts.tips !== 0 && (
+              <li>
+                <span>Tips</span>
+                <b>{fmtMoney(parts.tips)}</b>
+              </li>
+            )}
+            {parts.bonuses !== 0 && (
+              <li>
+                <span>Seller bonuses and credits</span>
+                <b>{fmtMoney(parts.bonuses)}</b>
+              </li>
+            )}
+            {parts.shipping !== 0 && (
+              <li>
+                <span>Postage</span>
+                <b>{fmtMoney(parts.shipping)}</b>
+              </li>
+            )}
+            {parts.refunds !== 0 && (
+              <li>
+                <span>Refunded orders</span>
+                <b>{fmtMoney(parts.refunds)}</b>
+              </li>
+            )}
+            {parts.boosts !== 0 && (
+              <li>
+                <span>Show boosts</span>
+                <b>{fmtMoney(parts.boosts)}</b>
+              </li>
+            )}
+            {parts.unrecognised !== 0 && (
+              <li className="is-flag">
+                <span>Rows the import could not name</span>
+                <b>{fmtMoney(parts.unrecognised)}</b>
+              </li>
+            )}
+            <li className="is-total">
+              <span>What the ledger holds</span>
+              <b>{fmtMoney(parts.total)}</b>
+            </li>
+          </ul>
+        )}
+        <p className="fin-ledger-note">
+          Costs you typed into this app are <b>not</b> in that list or that total — the expenses
+          panel, the stock broken on air, a prize given away. Whatnot never saw them, so putting
+          them on this side would report our own bookkeeping as the platform&rsquo;s error.
+        </p>
+        </>
+      )}
+    </Note>
   )
 }

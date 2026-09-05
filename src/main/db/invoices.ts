@@ -32,6 +32,7 @@ import {
 import type { ScanSoCandidate } from '@shared/types'
 import type Database from 'better-sqlite3'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
+import type { PaymentTiming } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
 import { getDb, getMeta } from './database'
 import {
@@ -58,6 +59,73 @@ import { foldTicketIntoDocument, issueDealTicket, markDropshipPair } from './dea
 import { isOpenTab } from '@shared/roadshowTab'
 import { addSaleLink, listSaleLinks } from './salePurchaseLinks'
 import { soleSourceOrder } from '@shared/poStock'
+
+/**
+ * The picker's split, checked and turned into rows.
+ *
+ * ## MAIN IS THE TRUST BOUNDARY, and these decide which shelves get drawn down
+ *
+ * The form checks the sum too and disables its button — but a renderer is a
+ * convenience, not a guarantee, and every other path into `saveInvoice` (the
+ * server transport, a future import, a test) reaches this with whatever it was
+ * handed. Rows that do not add up to the line's quantity would put a different
+ * number of units on the document than on the shelves, silently, so they are
+ * refused here rather than trusted.
+ *
+ * ## What is NOT checked: whether a shelf has enough
+ *
+ * Deliberately. Selling ahead of the shelf is ordinary — the case is in transit,
+ * the shop is holding one, the count is a day old — and `applyInvoiceStock`
+ * already takes what is there and leaves the rest owed on the line. That rule is
+ * inherited from the single-shelf picker and is not revisited by splitting.
+ *
+ * ## An empty split is not a split
+ *
+ * Zero-quantity rows are dropped, and a line left with none returns none — which
+ * is the implicit single slice every sales order ever written already has.
+ */
+function buildLineAllocations(
+  input: ReadonlyArray<{ location: string; quantity: number }> | null | undefined,
+  quantity: number,
+  item: string
+): InvoiceLineAllocation[] {
+  const rows = (input ?? [])
+    .map((a) => ({
+      location: String(a?.location ?? '').trim(),
+      quantity: Math.max(0, Math.round(Number(a?.quantity) || 0))
+    }))
+    .filter((a) => a.location !== '' && a.quantity > 0)
+  // ONE SHELF IS NOT A SPLIT. The line's own destination already says it, and
+  // `allocationProblem` refuses a single stored row for exactly that reason —
+  // two ways to say the same thing can disagree. `toLineChoice` collapses this
+  // on the way out of the picker; main does it again because main is the trust
+  // boundary and every other caller reaches here unmediated.
+  if (rows.length <= 1) return []
+
+  const problem = allocationProblem(rows, quantity)
+  if (problem) {
+    throw new Error(`${item || 'A line'}: ${problem}`)
+  }
+
+  return rows.map((r) => {
+    const holdsStock = destinationHoldsStock(r.location)
+    return {
+      id: randomUUID(),
+      quantity: r.quantity,
+      destination: r.location,
+      // The same rule the line itself follows: goods off our own shelf came from
+      // stock and name no supplier, and anything else is somebody shipping direct.
+      supplier: holdsStock ? null : r.location,
+      holdsStock,
+      /** Nothing names an order here, so there is no number to print. */
+      sourcePoNumber: null,
+      // The picker chooses SHELVES. Naming a purchase order is a separate
+      // question asked on the line, and inventing an answer here would put a
+      // cost basis on units nobody said came from that order.
+      sourcePoId: null
+    }
+  })
+}
 
 /**
  * What to STORE in a line's destination column.
@@ -562,6 +630,10 @@ interface InvoiceRow extends AddressRow, ShipAddressRow {
   total_changed_at: string | null
   qbo_status_attempted_at: string | null
   qbo_status_error: string | null
+  qbo_payment_id: string | null
+  qbo_payment_posted_at: string | null
+  qbo_payment_error: string | null
+  qbo_payment_attempted_at: string | null
   total: number
   paid_at: string | null
   paid_by: string | null
@@ -678,6 +750,10 @@ function toInvoice(r: InvoiceRow): Invoice {
     totalChangedAt: r.total_changed_at ?? null,
     qboStatusAttemptedAt: r.qbo_status_attempted_at ?? null,
     qboStatusError: r.qbo_status_error ?? null,
+    qboPaymentId: r.qbo_payment_id ?? null,
+    qboPaymentPostedAt: r.qbo_payment_posted_at ?? null,
+    qboPaymentError: r.qbo_payment_error ?? null,
+    qboPaymentAttemptedAt: r.qbo_payment_attempted_at ?? null,
     total: r.total,
     paidAt: r.paid_at,
     paidBy: r.paid_by,
@@ -1093,7 +1169,8 @@ export function getInvoice(id: string): InvoiceDetail | null {
  * splits are simply absent from the map, and `toLine` defaults them to `[]`,
  * which is the zero-rows case `effectiveSlices` reads as one implicit slice.
  */
-function readLineAllocations(
+/** Exported for the stock audit, which needs the same splits the engine sees. */
+export function readLineAllocations(
   db: Database.Database,
   invoiceId: string
 ): Map<string, InvoiceLineAllocation[]> {
@@ -1458,7 +1535,20 @@ export function saveInvoice(
       // Null on every ordinary line — see @shared/poStock for why only an open
       // roadshow order is ever offered, and consumeFromPo for what naming one
       // does to the cost.
-      sourcePoId: clean(l.sourcePoId)
+      sourcePoId: clean(l.sourcePoId),
+      /**
+       * THE LINE SPREAD ACROSS SHELVES, when the picker split it.
+       *
+       * Built HERE, once, so the stock pass and the row insert below are handed
+       * the identical objects. `stockDrawingLines` runs before the lines are
+       * written and reads this field, so a split that existed only in the insert
+       * would draw the wrong shelves and leave a table that disagreed with the
+       * movement it caused.
+       *
+       * Empty for every ordinary line, which writes no rows and leaves the whole
+       * path byte for byte as it was — see @shared/invoiceAllocations.
+       */
+      allocations: buildLineAllocations(l.allocations, Number(l.quantity) || 0, l.item)
     }
   })
 
@@ -1794,6 +1884,12 @@ export function saveInvoice(
     }
 
     db.prepare(`DELETE FROM invoice_lines WHERE invoice_id = ?`).run(id)
+    const insertAllocation = db.prepare(
+      `INSERT INTO invoice_line_allocations
+         (id, invoice_id, invoice_line_id, quantity, destination, supplier, source_po_id,
+          position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
     const insert = db.prepare(
       `INSERT INTO invoice_lines
          (id, invoice_id, position, item, product_id, sku, description, quantity, rate, amount,
@@ -1861,6 +1957,23 @@ export function saveInvoice(
         destination: lineDestination(l.destination, stockLocation),
         supplier: (l.supplier ?? '').trim() || null
       })
+      // The split, when there is one. The same rows the stock pass above was
+      // given, so the table and the movement can never describe different
+      // shelves. Nothing is written for an ordinary line.
+      for (const [n, a] of l.allocations.entries()) {
+        insertAllocation.run(
+          a.id,
+          id,
+          l.id,
+          a.quantity,
+          a.destination,
+          a.supplier,
+          a.sourcePoId,
+          n,
+          stamp,
+          stamp
+        )
+      }
     }
   })
   run()
@@ -2137,6 +2250,49 @@ export function listPostedInvoices(limit = 200): Invoice[] {
  *
  * Compared before the write, over the four figures the card actually draws.
  */
+/**
+ * THE PAYMENT LANDED. Write the id, and nothing else may write it.
+ *
+ * This is the interlock the double-payment guard reads, so it is deliberately a
+ * separate statement from everything else a successful post touches: an id that
+ * only gets written as part of a wider update is an id that goes missing the
+ * first time some other column in that update is invalid.
+ *
+ * The balance is NOT written here. What QuickBooks now says is outstanding is
+ * QuickBooks' to report, and reading it back is `Check QuickBooks` — guessing it
+ * to zero would put a number nobody observed under a label that means observed.
+ */
+export function recordQboPayment(id: string, paymentId: string): boolean {
+  const stamp = nowIso()
+  const res = getDb()
+    .prepare(
+      `UPDATE invoices
+          SET qbo_payment_id = ?, qbo_payment_posted_at = ?, qbo_payment_attempted_at = ?,
+              qbo_payment_error = NULL, updated_at = ?
+        WHERE id = ? AND qbo_payment_id IS NULL`
+    )
+    .run(paymentId, stamp, stamp, stamp, id)
+  return res.changes > 0
+}
+
+/**
+ * IT DID NOT LAND. Record why, and leave the interlock alone.
+ *
+ * `qbo_payment_id` is untouched on purpose: a payment that was never created
+ * must not block the one that should be. The error is a state somebody can see
+ * and retry from, rather than a toast that scrolled past.
+ */
+export function recordQboPaymentFailure(id: string, error: string): void {
+  const stamp = nowIso()
+  getDb()
+    .prepare(
+      `UPDATE invoices
+          SET qbo_payment_error = ?, qbo_payment_attempted_at = ?, updated_at = ?
+        WHERE id = ?`
+    )
+    .run(String(error ?? '').slice(0, 500), stamp, stamp, id)
+}
+
 export function recordQboObservation(id: string, o: QboInvoiceObservation): boolean {
   const stamp = nowIso()
   const looked = o.payments.length > 0 || o.linkedPayments === 0
@@ -2264,7 +2420,29 @@ export function recordQboObservation(id: string, o: QboInvoiceObservation): bool
  * purchase legitimately supplies several. `otherSales` is carried so the picker
  * can say so rather than the operator finding out afterwards.
  */
-export function linkablePurchaseOrders(invoiceId: string, limit = 60): LinkablePurchaseOrder[] {
+export function linkablePurchaseOrders(
+  invoiceId: string,
+  limit = 60,
+  /**
+   * WHAT SOMEBODY IS LOOKING FOR — a number, a supplier, a shop.
+   *
+   * The list is newest-first and capped, which is right for browsing and useless
+   * for reaching. Once sixty orders have been raised since, an older purchase is
+   * simply not on the list and there was no other way to it: the owner's ask was
+   * "attach POs that I make to any SO, if they are in history or not", and it
+   * was the PURCHASE that could not be reached, not the sale.
+   *
+   * Matched HERE rather than in the picker, because filtering the sixty rows
+   * already fetched can only ever search the sixty that were already reachable.
+   * A search that cannot find the sixty-first is the same dead end wearing a
+   * text box.
+   */
+  query = ''
+): LinkablePurchaseOrder[] {
+  const q = String(query ?? '').trim()
+  // LIKE with the wildcards in the parameter, so a number typed with or without
+  // its prefix finds the same order and nothing has to be escaped into the SQL.
+  const like = `%${q.replace(/[%_]/g, ' ')}%`
   const rows = getDb()
     .prepare(
       `SELECT po.id, po.po_number, po.supplier, po.location, po.status, po.total,
@@ -2300,10 +2478,27 @@ export function linkablePurchaseOrders(invoiceId: string, limit = 60): LinkableP
                 AS matching_products
          FROM purchase_orders po
         WHERE po.status != 'cancelled'
+          -- A CANCELLED ORDER STAYS OUT, and that is the one exception to
+          -- "any". It is a purchase that was withdrawn, so hanging a sale's
+          -- provenance on it would claim the goods came from something that
+          -- never happened.
+          AND (? = ''
+               OR po.po_number LIKE ? COLLATE NOCASE
+               OR COALESCE(po.supplier, '') LIKE ? COLLATE NOCASE
+               OR COALESCE(po.location, '') LIKE ? COLLATE NOCASE)
         ORDER BY COALESCE(po.ordered_at, po.created_at) DESC, po.po_number DESC
         LIMIT ?`
     )
-    .all(invoiceId, invoiceId, invoiceId, Math.max(1, Math.min(500, limit))) as Array<{
+    .all(
+      invoiceId,
+      invoiceId,
+      invoiceId,
+      q,
+      like,
+      like,
+      like,
+      Math.max(1, Math.min(500, limit))
+    ) as Array<{
     id: string
     po_number: string
     supplier: string | null
@@ -2661,10 +2856,14 @@ export function recordInvoicePayment(
     )
     const markPaid = input.markPaid !== false
     const ready = input.readyToShip !== false
+    // TRUE UNLESS SOMEBODY SAYS OTHERWISE. Every caller that predates the flag
+    // was the "Paid up front…" dialog, so absent means yes and no stored row
+    // changes meaning. See InvoicePaymentInput.upFront.
+    const upFront = input.upFront !== false
 
     db.prepare(
       `UPDATE invoices
-          SET paid_up_front = 1,
+          SET paid_up_front = CASE WHEN ? THEN 1 ELSE paid_up_front END,
               payment_method = COALESCE(?, payment_method),
               payment_reference = COALESCE(?, payment_reference),
               paid_at = COALESCE(paid_at, ?),
@@ -2674,6 +2873,7 @@ export function recordInvoicePayment(
               updated_at = ?
         WHERE id = ?`
     ).run(
+      upFront ? 1 : 0,
       (input.method ?? '').trim() || null,
       (input.reference ?? '').trim() || null,
       stamp,
@@ -2688,8 +2888,11 @@ export function recordInvoicePayment(
 
     const how = (input.method ?? '').trim()
     recordOrderEvent('so', id, 'paid', {
+      // The log line follows the same flag as the column. An on-delivery order
+      // logged as "Paid up front" would put a claim nobody made into the one
+      // record of this order that is never rewritten.
       detail:
-        `Paid up front — ${amount.toFixed(2)}` +
+        `${upFront ? 'Paid up front' : 'Payment recorded'} — ${amount.toFixed(2)}` +
         (how ? ` by ${how}` : '') +
         ((input.reference ?? '').trim() ? ` (${(input.reference as string).trim()})` : ''),
       actorId,
@@ -2986,7 +3189,15 @@ function rederiveInvoiceStock(
   }
 }
 
-function stockDrawingLines(
+/**
+ * WHICH SLICES OF WHICH LINES SHOULD DRAW A SHELF.
+ *
+ * Exported for the stock audit, which must ask this question with EXACTLY this
+ * answer. A second copy of the rule in the audit would drift the first time a
+ * destination rule changed, and the failure would be an audit quietly declaring
+ * every dropship broken — which is how a report gets switched off.
+ */
+export function stockDrawingLines(
   lines: ReadonlyArray<{
     position: number
     productId?: string | null
@@ -3804,6 +4015,225 @@ export function setInvoiceItemsInHand(
  * Not "the order was edited" — the old figures and the new ones, so the trail
  * survives the person who made it. Refused on a VOID order only.
  */
+/**
+ * Correct what POSTING a sale cost us, on an order that has already gone out.
+ *
+ * ## Why this needs a door of its own
+ *
+ * The figure was reachable from exactly one place — the invoice form — and that
+ * form is refused the moment an invoice posts, correctly: this app is not the
+ * system of record for a document a buyer has been billed against. So the
+ * number became unreachable at precisely the wrong moment, because postage is
+ * bought when the parcel goes, which is AFTER the order leaves draft. The one
+ * cost on a sales order that is never known at draft time was the one cost only
+ * a draft could record.
+ *
+ * ## Why it is safe where a line edit is not
+ *
+ * This is a cost WE carry, not a charge to the buyer. It is deliberately absent
+ * from `total` and never reaches QuickBooks (see Invoice.shippingCost), so
+ * moving it cannot make our copy of a sent document disagree with Intuit's —
+ * which is the entire risk that makes `setInvoiceLines` announce itself and
+ * leave `qbo_total_amt` alone. Nothing here touches a line, a stock move, a
+ * cost lot or the invoice total.
+ *
+ * Refused on a VOID order only, the same floor `setInvoiceLines` uses: a void
+ * is not a document being corrected, and postage on one is not a cost anybody
+ * is going to reconcile.
+ *
+ * Empty clears to NULL rather than 0, keeping "nobody has said" distinct from
+ * "the postage was free" — `orderShippingCost` falls back to the per-parcel
+ * label costs on a null and must not be told zero instead.
+ */
+export function setInvoiceShippingCost(
+  id: string,
+  cost: number | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const row = db.prepare('SELECT id, status FROM invoices WHERE id = ?').get(id) as
+    | { id: string; status: string }
+    | undefined
+  if (!row) return { invoice: null, error: 'Sales order not found.' }
+  if (row.status === 'void') {
+    return { invoice: getInvoice(id), error: 'This order is void — its postage is not worth correcting.' }
+  }
+  db.prepare('UPDATE invoices SET shipping_cost = ?, updated_at = ? WHERE id = ?').run(
+    shippingIn(cost),
+    nowIso(),
+    id
+  )
+  return { invoice: getInvoice(id) }
+}
+
+/**
+ * WHEN THIS BUYER PAYS — up front, on delivery, or nobody has said.
+ *
+ * The owner: "in the edit sales order section can you go ahead and let me change
+ * the payment options like on delivery or upon delivery."
+ *
+ * It could only be set on the CREATE form until now, and that form is refused
+ * the moment an invoice posts — so an order written before the terms were agreed
+ * carried "Terms not set" for ever, and one entered wrong could never be put
+ * right. It is an INTENTION about a deal, discovered and revised like any other,
+ * not a fact the document fixes.
+ *
+ * ## What moves when it changes, and what does not
+ *
+ * Nothing about the money. No amount, no date, no ledger row — `paidAt`,
+ * `paidUpFront` and every figure stay exactly as they are, because what somebody
+ * agreed about WHEN to pay is a different fact from whether they have.
+ *
+ * What it does move is the gate: `readyToShipBlockedReason` holds an UNPAID
+ * up-front order off the packing list. Setting an order to up-front while it is
+ * unpaid therefore closes that gate, and setting it to on-delivery opens it. The
+ * gate is read live on every move rather than stamped, so this needs no
+ * re-derivation — and an order ALREADY released stays released, because taking
+ * it back off is a decision somebody makes with the Ready to Ship control, not a
+ * side effect of correcting the terms.
+ *
+ * Refused on a void, which owes nothing and will not be paid on any terms.
+ */
+export function setInvoicePaymentTiming(
+  id: string,
+  timing: PaymentTiming | null,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const row = db.prepare('SELECT id, status, payment_timing FROM invoices WHERE id = ?').get(id) as
+    | { id: string; status: string; payment_timing: string | null }
+    | undefined
+  if (!row) return { invoice: null, error: 'Sales order not found.' }
+  if (row.status === 'void') {
+    return { invoice: getInvoice(id), error: 'That order was voided.' }
+  }
+  const next = timing === 'front' || timing === 'delivery' ? timing : null
+  if (next === asPaymentTiming(row.payment_timing)) return { invoice: getInvoice(id) }
+  db.prepare('UPDATE invoices SET payment_timing = ?, updated_at = ? WHERE id = ?').run(
+    next,
+    nowIso(),
+    id
+  )
+  // LOGGED, because it changes what the packing floor is allowed to do with the
+  // order and "who moved this to up front" is a question that gets asked. Filed
+  // as a note rather than a kind of its own — OrderEventKind has no entry for
+  // terms, and inventing one would mean teaching every filter and chip about a
+  // category that carries one sentence.
+  recordOrderEvent('so', id, 'note', {
+    detail:
+      next === 'front'
+        ? 'Terms set to paid up front'
+        : next === 'delivery'
+          ? 'Terms set to paid on delivery'
+          : 'Terms cleared — nobody has said when this is paid',
+    actorId,
+    db
+  })
+  return { invoice: getInvoice(id) }
+}
+
+/**
+ * BOOK THE STOCK FOR AN ORDER THAT NEVER TOOK ANY.
+ *
+ * `applyInvoiceStock` clamps every line to what the shelf could give —
+ * `Math.min(asked, have)` — and a line that could give NOTHING writes no move at
+ * all. That is the right answer at the moment of saving: the boxes are not in the
+ * building and the line stays owed.
+ *
+ * What was missing is the second half. Nothing ever came back when the stock DID
+ * arrive, so an order sold ahead of its pallet stayed at zero units drawn for
+ * ever — and because `invoice_stock_moves` is the row the wholesale list, the
+ * history and the P&L all start FROM, the order was not merely uncosted. It was
+ * INVISIBLE to every one of them. One silent clamp, three screens missing an
+ * order, and nothing anywhere saying so.
+ *
+ * This is the deliberate, named repair: release whatever this order holds and
+ * take it again against today's shelf. It is exactly what saving the order does,
+ * with no edit to make — which matters, because the only existing way to re-run
+ * it was to change something, and changing a posted order to fix an accounting
+ * gap is how a quantity gets altered by accident.
+ *
+ * SAFE TO PRESS TWICE. The release puts back precisely what was taken (see
+ * releaseInvoiceStock, which walks the stored moves), so a re-run on an order
+ * that is already fully booked hands the units back and takes the same ones
+ * again — identical result, no drift. An order that is already right is not
+ * harmed by asking.
+ *
+ * It cannot invent stock. If the shelf is still empty the order books nothing
+ * again and says so, which is the honest answer and is why the count comes back.
+ */
+export function rebookInvoiceStock(
+  id: string,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string; units?: number } {
+  const db = getDb()
+  const guard = liveInvoiceOr(db, id)
+  if (!guard.ok) return guard.result
+
+  const run = db.transaction((): { invoice: InvoiceDetail | null; error?: string; units?: number } => {
+    const header = db
+      .prepare(`SELECT invoice_number, customer_name, location FROM invoices WHERE id = ?`)
+      .get(id) as
+      | { invoice_number: string | null; customer_name: string; location: string | null }
+      | undefined
+    if (!header) return { invoice: null, error: 'That order is gone.' }
+    const stockLocation = invoiceStockLocation(header.location)
+    const stamp = nowIso()
+
+    type Row = {
+      id: string
+      position: number
+      product_id: string | null
+      quantity: number
+      destination: string | null
+      supplier: string | null
+      source_po_id: string | null
+    }
+    const lines = db
+      .prepare(
+        `SELECT id, position, product_id, quantity, destination, supplier, source_po_id
+           FROM invoice_lines WHERE invoice_id = ? ORDER BY position`
+      )
+      .all(id) as Row[]
+    const splits = readLineAllocations(db, id)
+
+    /**
+     * EVERY line counts as having drawn a shelf before.
+     *
+     * `wasStock` decides which lines get their fulfilled quantity ZEROED when
+     * they no longer draw one. Nothing about the order is changing here, so
+     * claiming they all did is the conservative answer: a line that still draws
+     * is re-derived from the move it just took, and one that does not is zeroed
+     * — which is correct, because it is holding a figure describing a draw it no
+     * longer makes.
+     */
+    const wasStock = new Map(lines.map((l) => [l.id, true]))
+
+    rederiveInvoiceStock(
+      db,
+      id,
+      { invoice_number: header.invoice_number, customer_name: header.customer_name },
+      stockLocation,
+      lines,
+      splits,
+      lines.map((l) => l.id),
+      wasStock,
+      actorId,
+      stamp
+    )
+
+    const units = (
+      db
+        .prepare(
+          `SELECT COALESCE(SUM(quantity), 0) AS n FROM invoice_stock_moves WHERE invoice_id = ?`
+        )
+        .get(id) as { n: number }
+    ).n
+    return { invoice: getInvoice(id), units }
+  })
+
+  return run()
+}
+
 export function setInvoiceLines(
   id: string,
   changes: ReadonlyArray<{
@@ -4730,6 +5160,7 @@ export function invoiceStats(): {
   sent: number
   paid: number
   outstanding: number
+  owedCount: number
   paidTotal: number
   thisMonth: number
 } {
@@ -4775,7 +5206,37 @@ export function invoiceStats(): {
         .get() as { value: number }
     ).value
   const paidTotal = sumWhere(PAID_SQL)
-  const outstanding = sumWhere(`status != 'void' AND NOT (${PAID_SQL})`)
+  /**
+   * OWED IS NOT THE NEGATION OF PAID, and writing it as one put every invoice
+   * QuickBooks had voided into the Awaiting payment tile.
+   *
+   * `NOT (PAID_SQL)` is true for a qbo-voided invoice — correctly, because no
+   * money arrived on it and none ever will. But "no money arrived" and "money
+   * is coming" are different claims, and only the local `status = 'void'` was
+   * being subtracted. So voiding a sale properly in Intuit RAISED the figure
+   * the owner reads as money on its way in, which is the opposite of what
+   * voiding one means.
+   *
+   * This is the SQL form of `invoiceIsOwed`, and it has to stay that way: both
+   * kinds of void are owed by nobody, a payment recorded in either place
+   * settles it, and everything else is owed in every column — drafts included,
+   * because the figure is meant to hold whatever stage a sale is standing in.
+   */
+  const OWED_SQL = `status != 'void' AND COALESCE(qbo_voided, 0) != 1
+       AND paid_at IS NULL AND qbo_paid_at IS NULL`
+  const outstanding = sumWhere(OWED_SQL)
+  /**
+   * HOW MANY sales are still owed, beside how much.
+   *
+   * The mirror of the Open tile on the purchase board, counted off the same
+   * predicate as the money beside it so the two can never describe different
+   * sets of orders. A count answers "how many people do I have to chase",
+   * which is a different question from "how much", and the buy side has
+   * always been able to answer it.
+   */
+  const owedCount = (
+    getDb().prepare(`SELECT COUNT(*) AS n FROM invoices WHERE ${OWED_SQL}`).get() as { n: number }
+  ).n
 
   const month = new Date().toISOString().slice(0, 7)
   const thisMonth = (
@@ -4793,6 +5254,7 @@ export function invoiceStats(): {
     sent: count('sent'),
     paid: count('paid'),
     outstanding: money(outstanding),
+    owedCount,
     paidTotal: money(paidTotal),
     thisMonth: money(thisMonth)
   }

@@ -41,6 +41,18 @@ import { finance } from './api'
  * are shown with their cost struck out and are EXCLUDED from the totals, rather
  * than counted at zero cost. Counting them would overstate the month's profit by
  * their entire revenue, which is the one failure a finance screen must not have.
+ *
+ * ## AND ROWS NOBODY HAS PRICED YET, which look identical and are not
+ *
+ * A roadshow case is bought on a tab at a price the shop has not given and can
+ * be sold the same afternoon. Its layer sits at zero, so the sale arrived here
+ * reporting the entire sale price as margin — and unlike a legacy row it was not
+ * marked, because from the report's side both are simply a cost of nothing.
+ *
+ * They are held out of the margin totals on exactly the reasoning above, and
+ * named: the row says which tab is still owing a price, because this is the one
+ * of the two that somebody can go and fix. Pricing that line re-costs the layer
+ * AND this sale with it, and the row rejoins the totals with a real margin.
  */
 export function WholesaleTab(): JSX.Element {
   const [rows, setRows] = useState<WholesaleSaleRow[] | null>(null)
@@ -70,16 +82,24 @@ export function WholesaleTab(): JSX.Element {
   // table. A header that kept reporting the whole file while the rows below it
   // showed one customer is a number nobody can reconcile against anything.
   const totals = useMemo(() => {
-    const priced = shown.filter((r) => r.costKnown)
+    // TWO REASONS A COST CAN BE MISSING, and both are held out of the margin.
+    // They are counted separately because only one of them is a job: a legacy
+    // row will never have a figure, and an unpriced tab line is waiting for one.
+    const priced = shown.filter((r) => r.costKnown && !r.costPending)
+    const pending = shown.filter((r) => r.costKnown && r.costPending)
     const sum = (list: WholesaleSaleRow[], pick: (r: WholesaleSaleRow) => number): number =>
       Math.round(list.reduce((n, r) => n + pick(r), 0) * 100) / 100
+    const tabs = [...new Set(pending.map((r) => r.pendingPoNumber ?? '').filter(Boolean))].sort()
     return {
       units: shown.reduce((n, r) => n + r.quantity, 0),
       revenue: sum(shown, (r) => r.revenue),
       pricedRevenue: sum(priced, (r) => r.revenue),
       cost: sum(priced, (r) => r.cost),
       margin: sum(priced, (r) => r.margin),
-      unpriced: shown.length - priced.length
+      unpriced: shown.filter((r) => !r.costKnown).length,
+      pending: pending.length,
+      pendingRevenue: sum(pending, (r) => r.revenue),
+      pendingTabs: tabs
     }
   }, [shown])
 
@@ -109,6 +129,22 @@ export function WholesaleTab(): JSX.Element {
           sub={pct === null ? undefined : `${pct.toFixed(1)}% of what was charged`}
         />
       </div>
+
+      {/* THE ONE THAT IS A JOB, said first and said in money. Pricing the tab
+          re-costs these sales, so this is a number that comes back rather than a
+          number that is lost — the opposite of the note below it. */}
+      {totals.pending > 0 && (
+        <p className="wsale-note is-todo">
+          <Icon name="Clock" size={14} />
+          <Money value={totals.pendingRevenue} /> of this was sold out of a roadshow tab the shop
+          has not priced yet, over {totals.pending} line{totals.pending === 1 ? '' : 's'}. Until
+          {totals.pendingTabs.length > 0
+            ? ` ${totals.pendingTabs.join(', ')} ${totals.pendingTabs.length === 1 ? 'is' : 'are'} priced`
+            : ' those lines are priced'}
+          , their cost of goods is nothing — so they are listed but left out of the cost and margin
+          above. Filling the price in on the tab corrects both the shelf and these sales.
+        </p>
+      )}
 
       {totals.unpriced > 0 && (
         <p className="wsale-note">
@@ -161,16 +197,30 @@ export function WholesaleTab(): JSX.Element {
                   <Money value={r.revenue} />
                 </td>
                 <td className="num">
-                  {r.costKnown ? (
-                    <Money value={r.cost} cost />
-                  ) : (
+                  {!r.costKnown ? (
                     <span className="wsale-unknown" title="Shipped before orders took their own stock">
                       not recorded
                     </span>
+                  ) : r.costPending ? (
+                    /* NOT "$0.00". The layer is real and the figure is coming;
+                       printing a zero here is what made a roadshow case read as
+                       pure profit on the one screen that reports margin. */
+                    <span
+                      className="wsale-toprice"
+                      title={`Bought on ${r.pendingPoNumber ?? 'a roadshow tab'} at a price the shop has not given yet. Price that line and this cost fills itself in.`}
+                    >
+                      {r.pendingPoNumber ? `on ${r.pendingPoNumber}` : 'to come'}
+                    </span>
+                  ) : (
+                    <Money value={r.cost} cost />
                   )}
                 </td>
                 <td className="num">
-                  {r.costKnown ? <Money value={r.margin} strong /> : <span className="wsale-unknown">—</span>}
+                  {r.costKnown && !r.costPending ? (
+                    <Money value={r.margin} strong />
+                  ) : (
+                    <span className="wsale-unknown">—</span>
+                  )}
                 </td>
               </tr>
             ))}

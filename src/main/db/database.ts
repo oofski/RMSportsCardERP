@@ -30,12 +30,26 @@ let db: Database.Database | null = null
  * RM Cardz moves to a shared cloud database the schema and queries port over
  * with minimal change.
  */
+/**
+ * Where the one file lives, for the things that must reason about it as a FILE
+ * rather than as a database.
+ *
+ * Restore is the reason this is exported. Swapping the database has to happen
+ * before anything opens it, so the code that does the swapping cannot ask an
+ * open handle where it lives — and a second copy of `join(userData,
+ * 'rm-operations.db')` somewhere else is a rename waiting to put the app's data
+ * and the app's idea of its data in two different places.
+ */
+export function databasePath(): string {
+  const dir = app.getPath('userData')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return join(dir, 'rm-operations.db')
+}
+
 export function getDb(): Database.Database {
   if (db) return db
 
-  const dir = app.getPath('userData')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  const file = join(dir, 'rm-operations.db')
+  const file = databasePath()
 
   db = new Database(file)
   db.pragma('journal_mode = WAL')
@@ -991,6 +1005,20 @@ function migrate(database: Database.Database): void {
       tax_rate              REAL NOT NULL DEFAULT 0.0518,
       processing_rate       REAL NOT NULL DEFAULT 0.029,
       processing_flat_cents INTEGER NOT NULL DEFAULT 30,
+      -- v93: WHAT THESE TERMS APPLY TO. 'all', 'break_spots' or 'whole_products'.
+      --
+      -- The commission is not one number. It depends on what was sold, and this
+      -- table resolved it by date alone -- one rate for every row on a night --
+      -- so a night mixing break spots and sealed product was priced wrong on
+      -- some of them by construction. Because gross is derived from net by
+      -- adding the modelled fee back, that error lands entirely on REVENUE and
+      -- never on the bottom line, which is exactly how it went unnoticed.
+      --
+      -- 'all' is what every existing row means, so the default changes no
+      -- stored figure. A scoped period MAY share dates with an 'all' period;
+      -- coveringRatePeriod prefers the narrower one, which is what lets an
+      -- exception be stated without carving the calendar around it.
+      scope                 TEXT NOT NULL DEFAULT 'all',
       note                  TEXT NOT NULL DEFAULT '',
       created_at            TEXT NOT NULL,
       updated_at            TEXT NOT NULL,
@@ -998,6 +1026,38 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_whatnot_fee_periods_from
       ON whatnot_fee_periods (from_date);
+
+    -- v93: WHAT THE PLATFORM SAYS THE WINDOW SOLD, in the platform's own words.
+    --
+    -- Revenue in this app is not recorded, it is CALCULATED: the ledger states
+    -- only the net, and gross is reverse-engineered per row by adding a modelled
+    -- fee back. So every error in the fee model lands on revenue, and until this
+    -- table there was nothing outside the app that any figure was ever checked
+    -- against. The owner reported revenue running 15 to 25 thousand a month over
+    -- Whatnot's own stated sales, every month, and no screen could confirm or
+    -- deny it.
+    --
+    -- One row is one document: a dashboard reading, a statement, a 1099. Storing
+    -- it makes the check STANDING rather than a calculator somebody runs once
+    -- and forgets, and it is the same record a year-end tie-out needs -- the
+    -- only external document that can confirm a whole year of derived revenue.
+    --
+    -- stated_fees is nullable on purpose. A dashboard often gives sales alone,
+    -- and demanding a number nobody has would mean the check never gets used.
+    CREATE TABLE IF NOT EXISTS whatnot_statements (
+      id           TEXT PRIMARY KEY,
+      -- Inclusive BUSINESS days, matching how rate periods and shows are dated.
+      from_date    TEXT NOT NULL,
+      to_date      TEXT NOT NULL,
+      stated_gross REAL NOT NULL,
+      stated_fees  REAL,
+      note         TEXT NOT NULL DEFAULT '',
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      created_by   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_whatnot_statements_from
+      ON whatnot_statements (from_date);
 
     -- v44: costs somebody TYPED against a business day.
     --
@@ -4580,6 +4640,217 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoices', 'total_changed_at', 'TEXT')
   setMeta(database, 'schema_version', '92')
 
+  /**
+   * v93: A RATE CAN NOW SAY WHAT IT APPLIES TO, and a stated figure can be kept.
+   *
+   * The owner reported streaming revenue running $15-25k a month above
+   * Whatnot's own sales figure, every month, and both halves of the cause were
+   * in the fee model rather than in the data.
+   *
+   * The commission was resolved by DATE ALONE — `effectiveFeeRates(periods,
+   * day)` returned one rate for every row on a night — while the real
+   * commission depends on what was sold. So any night carrying both break spots
+   * and sealed product was priced wrong on some rows by construction. And
+   * because the derived gross is net with the modelled fee added back, the whole
+   * error appears on revenue and none of it on net profit, which is why it
+   * survived: the bottom line looked right the entire time.
+   *
+   * Sizing it: at the model's own constants, 8% versus 4% is 4.84 cents of
+   * invented revenue per dollar of net. On the $285,333 month quoted in
+   * financeStreaming's own comments that is $13.8k, and $24.2k at half a million
+   * — the reported band, scaling with volume.
+   *
+   * The scope column is the second argument that module header had been asking
+   * for. The statements table is the other half: something outside the app for a
+   * derived figure to be checked against, which nothing has ever had.
+   *
+   * NOTHING IS BACKFILLED AND NOTHING MOVES. Every existing period defaults to
+   * 'all', which is what it already meant, so no stored figure changes until
+   * somebody deliberately narrows one.
+   */
+  addColumnIfMissing(database, 'whatnot_fee_periods', 'scope', "TEXT NOT NULL DEFAULT 'all'")
+  setMeta(database, 'schema_version', '93')
+
+  // v94: WHAT THE PLATFORM ACTUALLY PAID OUT, on a stated figure.
+  //
+  // The owner, on a July statement beside a screen reading $24k higher: "the
+  // things I am uploading is what we get in our account, so that is the most
+  // important part, since it is that minus COGS to profit."
+  //
+  // Sales and fees on a statement are totals the platform COMPUTED. The payout
+  // is cash that moved, and the app holds a figure of the same kind — the sum of
+  // the ledger's Amount column, recorded per row rather than derived. Comparing
+  // those two asks whether the app is holding the right SET OF ROWS, which is
+  // the question every fee comparison confounds and the one that has to be
+  // answered first: when the ledger holds more money than the window covers, no
+  // commission rate reproduces the stated sales, and fitFromGross correctly
+  // reports a negative rate without being able to say which figure to go and
+  // look at.
+  //
+  // NULLABLE, and every existing row stays null. A dashboard reading states
+  // sales alone, and a check that demanded a payout nobody had to hand is a
+  // check nobody runs.
+  addColumnIfMissing(database, 'whatnot_statements', 'stated_payout', 'REAL')
+  setMeta(database, 'schema_version', '94')
+
+  // v95: the payment this app recorded in QuickBooks for an invoice.
+  //
+  // THE ID IS THE INTERLOCK, not a decoration. Posting a payment moves money in
+  // somebody else's books, and the one failure that must never happen is posting
+  // the same one twice — which is exactly what a retry after a relay timeout
+  // would do. So the id QuickBooks hands back is written here, and
+  // paymentPlan() refuses outright when it is present. See @shared/quickbooksPayment.
+  //
+  // The error and the attempt time sit beside it so a failure is a state
+  // somebody can see and retry rather than a toast that scrolled away. They are
+  // deliberately NOT part of the interlock: a failed attempt records no id,
+  // because a payment that was not created must not block the one that should be.
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_id', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_posted_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_error', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_attempted_at', 'TEXT')
+  setMeta(database, 'schema_version', '95')
+
+  // v96: MONEY ON A PURCHASE ORDER THAT BOUGHT NO GOODS.
+  //
+  // The owner: "sometimes there might be like inventory that we add that is not
+  // actual inventory ... like we wired some 5000 but actually paid them 4900
+  // because of another deal ... add a line item as like a payment adjustment
+  // that doesnt tie back to inventory but just we can add nothing to
+  // discrepancy."
+  //
+  // A credit carried over from a previous deal, a shortfall settled on the next
+  // wire, a rebate. It changes what the ORDER cost and what was paid; it buys
+  // nothing that lands on a shelf.
+  //
+  // ## Why this is its own table and not a purchase order line
+  //
+  // Because a line means goods, all the way down. purchase_order_lines declares
+  // product_id NOT NULL with a foreign key, LINE_SELECT inner-joins the catalog,
+  // and receiving walks lines into po_line_receipts and opens a FIFO cost layer
+  // for each. A line carrying money and no product would either have to be given
+  // a fake product or be special-cased in every one of those places, and the
+  // first person to forget the special case would put a phantom case on a shelf.
+  //
+  // Kept out of the FIFO path by construction rather than by a guard: nothing in
+  // inventory reads this table.
+  //
+  // ## The amount is SIGNED
+  //
+  // Negative is the case the owner described and the common one — we paid less
+  // than the goods came to. Positive is the same fact the other way, a charge
+  // added on settlement. One column, either sign, so the arithmetic never has to
+  // ask which kind of adjustment it is holding.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_order_adjustments (
+      id         TEXT PRIMARY KEY,
+      po_id      TEXT NOT NULL,
+      amount     REAL NOT NULL,
+      note       TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_adjustments_po
+      ON purchase_order_adjustments (po_id);
+  `)
+  setMeta(database, 'schema_version', '96')
+
+  // v97: Whatnot's month-end summary, line for line.
+  //
+  // The statement used to hold three figures -- sales, a fees total, a payout --
+  // because that is what a dashboard reading shows. The month-end summary shows
+  // eleven, and the extra eight are the ones that answer the question the three
+  // never could.
+  //
+  // WHY THE DETAIL EARNS ITS COLUMNS. Of the six lines under Fees and costs this
+  // app MODELS exactly two, commission and payment processing; the other four --
+  // seller paid shipping, surcharges, order refunds, other adjustments -- are
+  // already rows in the ledger it imported. So the six typed lines split the
+  // month's cost into the part that can be wrong because a rate is wrong and the
+  // part that can only be wrong because rows are missing. Before this, a gap
+  // could be either and no screen could say which.
+  //
+  // ALL EIGHT ARE NULLABLE AND POSITIVE. Nullable because a statement that
+  // quotes sales alone is ordinary and must still save. Positive because that is
+  // how the platform prints them -- the six are all money off -- and a signed
+  // column would let one stray minus book a cost as income.
+  //
+  // Earnings and Fees and costs are deliberately NOT columns: the platform
+  // prints them as the sums of the lines under them, so storing them too would
+  // create a second figure that can disagree with the first.
+  for (const col of [
+    'stated_tips',
+    'stated_other_in',
+    'stated_commission',
+    'stated_processing',
+    'stated_shipping',
+    'stated_surcharges',
+    'stated_refunds',
+    'stated_other_out'
+  ]) {
+    addColumnIfMissing(database, 'whatnot_statements', col, 'REAL')
+  }
+  setMeta(database, 'schema_version', '97')
+
+  // v98: money paid against a purchase order, one row per payment.
+  //
+  // The owner: "sometimes we pay part of a PO." Until now `paid_at` was the
+  // whole story -- a single stamp meaning the money has gone -- and there was no
+  // way to say that half of it had. An order half wired read as unpaid, which
+  // is the same as saying nothing was sent.
+  //
+  // A TABLE RATHER THAN A COLUMN, and for the reason the adjustments table above
+  // is one: two part-payments are two facts, each with its own date and its own
+  // reason, and a running total on the order would lose both the moment it was
+  // written. Append-only, so what was paid and when is answerable months later.
+  //
+  // `paid_at` STAYS, and stays the same fact it always was: the moment the order
+  // was fully covered. It is now DERIVED -- stamped when the payments reach the
+  // total and cleared if one is removed and they no longer do -- so every screen
+  // that already reads it goes on meaning "this is settled" without being taught
+  // anything.
+  //
+  // The amount is POSITIVE. A refund from a supplier is not a negative payment:
+  // it is a credit against the order, which is what a payment adjustment is for.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_order_payments (
+      id         TEXT PRIMARY KEY,
+      po_id      TEXT NOT NULL,
+      amount     REAL NOT NULL,
+      note       TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_payments_po
+      ON purchase_order_payments (po_id);
+  `)
+  // EVERY ORDER ALREADY MARKED PAID GETS THE ROW THAT SAYS SO.
+  //
+  // Without this, an order settled last March has a stamp and no payments, and
+  // the balance -- which is now read from the rows -- would say the whole total
+  // is still owing on an order everybody knows was wired months ago. Worse, the
+  // first thing the new dialog would offer is paying it a second time.
+  //
+  // The row is the order's own total, dated the stamp it already carries, so the
+  // two agree by construction. The id is derived from the order id rather than
+  // random: it makes the row unique without a lookup, marks plainly where it
+  // came from, and means running this twice cannot double anything.
+  //
+  // Guarded on the order having NO payments at all, which is a condition the new
+  // code can never produce -- removing the last payment clears the stamp in the
+  // same transaction -- so this only ever sees rows written before v98.
+  database.exec(`
+    INSERT INTO purchase_order_payments (id, po_id, amount, note, created_by, created_at)
+    SELECT 'legacy-' || o.id, o.id, o.total, 'Marked paid before payments were recorded', NULL, o.paid_at
+      FROM purchase_orders o
+     WHERE o.paid_at IS NOT NULL
+       AND o.total > 0
+       AND NOT EXISTS (SELECT 1 FROM purchase_order_payments p WHERE p.po_id = o.id);
+  `)
+  setMeta(database, 'schema_version', '98')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in
@@ -4595,6 +4866,32 @@ function migrate(database: Database.Database): void {
   // migration re-deriving a number from data every machine already has is not
   // work anyone did on this one.
   runOnce(database, 'product_avg_cost_unit_dp_v1', () => resyncProductAvgCosts(database))
+
+  // A ONE-TIME REPAIR, not a schema change — no version is bumped, because no
+  // column moves. PRICE THE PURCHASE ORDER LINES LEFT BLANK BEHIND COSTED STOCK.
+  //
+  // The owner, looking at PO-0457 and PO-0458 after two rounds of fixes: "it does
+  // not work still I am seeing purchase orders with $0.00 even though we edited
+  // the prices ... inventory is accurate to it."
+  //
+  // He was right both times. Until today, pricing stock from the Inventory screen
+  // wrote the cost layer and stopped, leaving the purchase order at $0.00. That
+  // path is now wired — but wiring it did NOTHING for the orders already in that
+  // state, and the repair offered was to type the price again, which also did
+  // nothing: the layer was no longer at zero, so there was nothing to re-base and
+  // nothing to push. Every one of those orders was stuck at $0.00 with no way
+  // back through the app at all.
+  //
+  // So the rows are repaired here, once. This INVENTS NOTHING: the price written
+  // is the unit cost of the cost layer that this line's OWN RECEIPT created, read
+  // through po_line_receipts. The link was always there; only the write back to
+  // the document was missing. And it fills blanks only — a line already stating a
+  // price is untouched, the same refusal pushCostToPurchaseOrders enforces every
+  // other day.
+  //
+  // Placed after the average-cost re-derivation for the same reason that one is
+  // placed late: it can only be as right as the layers it reads.
+  runOnce(database, 'po_line_price_from_layer_v1', () => backfillBlankPoLinePrices(database))
 
   // v29: install the sync capture triggers LAST, after every seed, backfill and
   // one-time fixup above.
@@ -4730,6 +5027,71 @@ function reFingerprintLedger(database: Database.Database): void {
 }
 
 /** Run `fn` once, ever, tracked by a meta flag. */
+/**
+ * Give every blank purchase order line the cost of the layer its own receipt
+ * created, and restate the orders that changed.
+ *
+ * WRITTEN AS SQL HERE RATHER THAN CALLING pushCostToPurchaseOrders, because this
+ * runs during migration — before the module graph is safe to lean on and before
+ * anything else has opened the database — and a migration that imports half the
+ * app is a migration that fails on the one machine with an odd load order. The
+ * RULE is the same one that module enforces and the comment there is the place
+ * it is explained; this is the one-time application of it.
+ *
+ * Totals are recomputed from the lines plus freight, matching restateOrderTotal,
+ * and the COGS row keyed on the order moves with it — otherwise Finance goes on
+ * reporting a purchase that cost nothing.
+ */
+function backfillBlankPoLinePrices(database: Database.Database): void {
+  const rows = database
+    .prepare(
+      `SELECT r.po_line_id AS line_id, r.po_id AS po_id, lot.unit_cost AS cost
+         FROM po_line_receipts r
+         JOIN purchase_order_lines l ON l.id = r.po_line_id
+         JOIN inventory_lots lot ON lot.id = r.lot_id
+        WHERE lot.unit_cost > 0
+          AND (COALESCE(l.price_pending, 0) = 1 OR COALESCE(l.unit_price, 0) <= 0)
+        ORDER BY r.created_at ASC`
+    )
+    .all() as Array<{ line_id: string; po_id: string; cost: number }>
+  if (rows.length === 0) return
+
+  const priceLine = database.prepare(
+    `UPDATE purchase_order_lines SET unit_price = ?, price_pending = 0 WHERE id = ?`
+  )
+  const done = new Set<string>()
+  const orders = new Set<string>()
+  for (const r of rows) {
+    if (done.has(r.line_id)) continue
+    priceLine.run(r.cost, r.line_id)
+    done.add(r.line_id)
+    orders.add(r.po_id)
+  }
+
+  const linesOf = database.prepare(
+    'SELECT quantity, unit_price FROM purchase_order_lines WHERE po_id = ?'
+  )
+  const freightOf = database.prepare('SELECT shipping_cost FROM purchase_orders WHERE id = ?')
+  const setTotal = database.prepare('UPDATE purchase_orders SET total = ? WHERE id = ?')
+  const setCogs = database.prepare('UPDATE finance_cogs SET amount = ? WHERE po_id = ?')
+  const c2 = (n: number): number => Math.round(n * 100) / 100
+  for (const poId of orders) {
+    const all = linesOf.all(poId) as Array<{ quantity: number; unit_price: number }>
+    const freight = Math.max(
+      0,
+      Number((freightOf.get(poId) as { shipping_cost: number | null } | undefined)?.shipping_cost) || 0
+    )
+    const total = c2(
+      all.reduce((sum, l) => sum + c2(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0) + c2(freight)
+    )
+    setTotal.run(total, poId)
+    setCogs.run(total, poId)
+  }
+  console.log(
+    `[migration] priced ${done.size} purchase order line(s) from their cost layers across ${orders.size} order(s)`
+  )
+}
+
 function runOnce(database: Database.Database, key: string, fn: () => void): void {
   if (getMeta(database, key) === '1') return
   fn()

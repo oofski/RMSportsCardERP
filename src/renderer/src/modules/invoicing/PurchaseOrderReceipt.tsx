@@ -14,6 +14,7 @@ import {
   orderGlows
 } from '@shared/purchaseOrders'
 import { receiveProgress, receivableProgressOf } from '@shared/receiving'
+import { poBalance } from '@shared/orderActions'
 import { purchaseQtyFloor, stepDownBlockedReason, stepQty } from '@shared/lineQty'
 import {
   isOpenTab,
@@ -23,7 +24,7 @@ import {
   tabKnownTotal
 } from '@shared/roadshowTab'
 import { api } from '../../lib/api'
-import { Button, CenterLoader, Modal } from '../../components/ui'
+import { Button, CenterLoader, Input, Modal } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { FreightFields } from '../../components/FreightFields'
 import { ReceiveBar, ReceivePill } from '../../components/ReceiveProgress'
@@ -260,6 +261,14 @@ export function PurchaseOrderReceipt({
   }
 
   const meta = PO_STAGE_META[detail.status]
+  /**
+   * What is still owed, from the payments the detail already carries.
+   *
+   * The board's dialog is where a part-payment is TYPED; this only needs to say
+   * that one happened, so the Mark paid button here does not read "Mark paid" on
+   * an order half of which is already wired. Same arithmetic, one contract.
+   */
+  const receiptBalance = poBalance(detail.total, detail.payments ?? [])
   const moves = PO_TRANSITIONS[detail.status] ?? []
   const number = displayOrderNumber(detail.poNumber, detail.orderKind)
   const destinations = orderDestinations(detail)
@@ -303,6 +312,12 @@ export function PurchaseOrderReceipt({
   const settleRefusal = settleTabRefusal(tabFacts, detail.lines)
   const linesEditable =
     detail.status !== 'cancelled' && (detail.status !== 'received' || runningTab)
+  // Clamped the same way restateOrderTotal clamps it, so the breakdown drawn
+  // from this figure matches the arithmetic that produced the stored total.
+  const freight = Math.max(0, Number(detail.shippingCost) || 0)
+  // Signed, and summed the same way restateOrderTotal sums them, so the Items
+  // row derived by subtraction below still lands on the lines.
+  const adjustments = (detail.adjustments ?? []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0)
   // The Destination column earns its place only when there is more than one
   // answer, the same rule the PDF follows: an ordinary order all going to RM
   // prints the five columns it has always printed.
@@ -488,11 +503,19 @@ export function PurchaseOrderReceipt({
                   type="button"
                   className="btn po-markpaid"
                   disabled={payBusy}
-                  title={`Record that ${detail.poNumber} has been paid. It stays in ${meta.label} — this is the payment, not a stage.`}
+                  title={
+                    receiptBalance.partly
+                      ? `${formatMoney(receiptBalance.paid)} of ${formatMoney(receiptBalance.total)} has been sent. This pays the rest. To record another part-payment instead, use Pay on the board.`
+                      : `Record that ${detail.poNumber} has been paid. It stays in ${meta.label} — this is the payment, not a stage.`
+                  }
                   onClick={() => void markPaid()}
                 >
                   <Icon name="DollarSign" size={13} />
-                  Mark paid
+                  {/* SAYS WHAT IS LEFT once part of it has gone. "Mark paid" on
+                      an order half wired reads as though nothing was sent, and
+                      this is the one place that can say otherwise without
+                      opening the board's dialog. */}
+                  {receiptBalance.partly ? `Pay the rest — ${formatMoney(receiptBalance.outstanding)}` : 'Mark paid'}
                 </button>
               ))}
           </div>
@@ -640,9 +663,43 @@ export function PurchaseOrderReceipt({
           ))}
         </div>
 
-        <div className="po-grand-total">
-          <span>Grand total</span>
-          <span className="mono">{formatMoney(detail.total)}</span>
+        {/* WHAT THIS ORDER COMES TO, and what the figure is made of.
+            Freight has been inside the grand total since v0.0.218 and had
+            nowhere to be read: an order with $50 of shipping showed a total
+            $50 above the lines it lists, with nothing on the document saying
+            why. Breaking it out is what makes the total checkable — and the
+            shipping row is derived by SUBTRACTION from the stored total, so
+            the three numbers on screen always add up even if the arithmetic
+            behind them ever changes. */}
+        <div className="po-money">
+          {(freight > 0 || adjustments !== 0) && (
+            <div className="po-money-row">
+              <span>Items</span>
+              <span className="mono">{formatMoney(detail.total - freight - adjustments)}</span>
+            </div>
+          )}
+          <ShippingCostEditor
+            po={detail}
+            editable={detail.status !== 'cancelled'}
+            onSaved={(fresh) => {
+              setDetail(fresh)
+              // The board's copy of this PO carries the total, and it just
+              // moved. Same reason adding a line repaints.
+              void onSaved()
+            }}
+          />
+          <AdjustmentRows
+            po={detail}
+            editable={detail.status !== 'cancelled'}
+            onSaved={(fresh) => {
+              setDetail(fresh)
+              void onSaved()
+            }}
+          />
+          <div className="po-grand-total">
+            <span>Grand total</span>
+            <span className="mono">{formatMoney(detail.total)}</span>
+          </div>
         </div>
 
         {/* PARCELS, PAPERWORK AND HISTORY, in that order and all at the bottom.
@@ -722,12 +779,334 @@ function groupBySupplier(
 }
 
 /**
+ * MONEY ON THE ORDER THAT BOUGHT NO GOODS.
+ *
+ * The owner: "sometimes there might be like inventory that we add that is not
+ * actual inventory ... like we wired some 5000 but actually paid them 4900
+ * because of another deal ... add a line item as like a payment adjustment that
+ * doesnt tie back to inventory but just we can add nothing to discrepancy."
+ *
+ * A credit carried from a previous deal, a shortfall settled on the next wire, a
+ * rebate agreed after the fact. Each one is its own row so the reasons stay
+ * separate — two credits from two deals netted into one figure is a number
+ * nobody can explain six months later.
+ *
+ * ## It sits in the money block, not among the lines
+ *
+ * Because it is not a line, and the difference is the point: a line has a
+ * product, a quantity and a shelf to land on. This has none of those and must
+ * never look as though it does. Beside Shipping is exactly right — that is the
+ * app's existing answer to "why is the total not what the lines add up to", and
+ * this is the second answer to the same question.
+ *
+ * ## Signed, and typed as the owner says it
+ *
+ * He says "we paid 4900 instead of 5000", so the box takes −100. Minus is a
+ * credit, plus is a charge, and the row colours itself accordingly rather than
+ * making somebody read the sign.
+ *
+ * ## Editable after the boxes land, on freight's terms and for freight's reason
+ *
+ * It never enters a FIFO cost lot — a lot is costed at its LINE's unit price —
+ * so moving it late restates the document and the COGS row together and leaves
+ * nothing on a shelf disagreeing. Only a cancelled order refuses.
+ */
+function AdjustmentRows({
+  po,
+  editable,
+  onSaved
+}: {
+  po: PurchaseOrderDetail
+  editable: boolean
+  onSaved: (po: PurchaseOrderDetail) => void
+}): JSX.Element | null {
+  const toast = useToast()
+  const [adding, setAdding] = useState(false)
+  const [amount, setAmount] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const rows = po.adjustments ?? []
+
+  useEffect(() => {
+    setAdding(false)
+    setAmount('')
+    setNote('')
+  }, [po.id])
+
+  // Nothing recorded and nothing to be done about it — a cancelled order does
+  // not need a dead "Add" affordance under its total.
+  if (!editable && rows.length === 0) return null
+
+  const save = async (): Promise<void> => {
+    const value = Number(amount.trim())
+    if (!Number.isFinite(value) || value === 0) {
+      toast.error('Enter an amount other than zero — minus for a credit.')
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.addAdjustment(po.id, value, note.trim() || null)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not save that adjustment.')
+        return
+      }
+      onSaved(res.data)
+      setAdding(false)
+      setAmount('')
+      setNote('')
+      toast.success('Adjustment saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (id: string): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.removeAdjustment(id)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not remove that adjustment.')
+        return
+      }
+      onSaved(res.data)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      {rows.map((a) => (
+        <div className="po-money-row po-money-adj" key={a.id}>
+          <span>
+            {a.note?.trim() || 'Payment adjustment'}
+            {/* WHICH KIND, in a word, because the sign alone is easy to misread
+                on a row of right-aligned figures. */}
+            <span className="po-adj-kind">{a.amount < 0 ? 'credit' : 'charge'}</span>
+          </span>
+          <span className="po-adj-value">
+            <span className={`mono${a.amount < 0 ? ' po-adj-neg' : ''}`}>{formatMoney(a.amount)}</span>
+            {editable && (
+              <button
+                type="button"
+                className="icon-btn"
+                disabled={busy}
+                title="Remove this adjustment"
+                aria-label="Remove this adjustment"
+                onClick={() => void remove(a.id)}
+              >
+                <Icon name="X" size={12} />
+              </button>
+            )}
+          </span>
+        </div>
+      ))}
+
+      {editable && !adding && (
+        <div className="po-money-row po-money-adj">
+          <span>Payment adjustment</span>
+          <button
+            type="button"
+            className="po-ship-edit is-empty"
+            title="Money on this order that bought no goods — a credit from another deal, a rebate, a shortfall settled later"
+            onClick={() => setAdding(true)}
+          >
+            <span className="mono">Add</span>
+            <Icon name="Plus" size={11} />
+          </button>
+        </div>
+      )}
+
+      {editable && adding && (
+        <div className="po-money-row po-money-adj is-editing">
+          <span>Payment adjustment</span>
+          <div className="po-adj-form">
+            <Input
+              value={amount}
+              inputMode="decimal"
+              placeholder="-100.00"
+              autoFocus
+              aria-label="Adjustment amount"
+              className="po-price-input"
+              onChange={(e) => setAmount(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void save()
+                if (e.key === 'Escape') setAdding(false)
+              }}
+            />
+            <Input
+              value={note}
+              placeholder="Credit from the March deal"
+              aria-label="What this adjustment is for"
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void save()
+                if (e.key === 'Escape') setAdding(false)
+              }}
+            />
+            <Button variant="primary" icon="Check" loading={busy} onClick={() => void save()}>
+              Save
+            </Button>
+            <Button variant="ghost" onClick={() => setAdding(false)} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+/**
+ * What the supplier charged for freight, corrected on the document itself.
+ *
+ * ## Why this is editable at all, and why it sits with the money
+ *
+ * The figure was typed once on the create form and then frozen, which is the
+ * wrong shape for the thing it records: a carrier's invoice routinely arrives
+ * days after the boxes, so the number entered when the order was raised is
+ * usually an estimate and sometimes a guess. There was no way back to it.
+ *
+ * It lives beside the total rather than up in FreightEditor because it is the
+ * only part of "shipping" that is MONEY. Carrier, service and tracking describe
+ * who is bringing it; this one is on the bill, and the question it answers —
+ * "why is the total more than the lines add up to" — is asked while staring at
+ * the total. Keeping it out of that panel also keeps the two saves apart:
+ * FreightEditor writes through setFreight, which touches no money, and this
+ * writes through setHeader, which restates the total and the COGS row. One
+ * button doing both would half-save on a failure.
+ *
+ * ## Editable after the boxes land, unlike a line price
+ *
+ * Deliberately. Freight never enters a FIFO cost lot — receivePoLine costs
+ * every lot at the LINE's unit price — so moving it late restates the document
+ * and the ledger together and leaves nothing on the shelf disagreeing. That
+ * disagreement is the entire reason a line price freezes on receipt; without
+ * it, the rule has nothing to protect. Only a cancelled order refuses, because
+ * its COGS row has already been voided and there is no bill left to correct.
+ */
+function ShippingCostEditor({
+  po,
+  editable,
+  onSaved
+}: {
+  po: PurchaseOrderDetail
+  editable: boolean
+  onSaved: (po: PurchaseOrderDetail) => void
+}): JSX.Element | null {
+  const toast = useToast()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(po.shippingCost != null ? String(po.shippingCost) : '')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setDraft(po.shippingCost != null ? String(po.shippingCost) : '')
+    setEditing(false)
+  }, [po.id, po.shippingCost])
+
+  // Nothing to say and nothing to be done about it: a cancelled order with no
+  // freight on it would otherwise carry a dead row reading "Shipping —".
+  if (!editable && po.shippingCost == null) return null
+
+  const save = async (): Promise<void> => {
+    const raw = draft.trim()
+    // An empty box means "nobody said", which is a different fact from zero —
+    // the same distinction the column has carried since v82 — so it clears to
+    // null rather than saving 0.00.
+    const next = raw === '' ? null : Number(raw)
+    if (next !== null && (!Number.isFinite(next) || next < 0)) {
+      toast.error('Shipping has to be a number, and not a negative one.')
+      return
+    }
+    if (next === (po.shippingCost ?? null)) {
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.setHeader(po.id, { shippingCost: next })
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not save the shipping cost.')
+        return
+      }
+      onSaved(res.data)
+      setEditing(false)
+      toast.success(next === null ? 'Shipping cost cleared.' : 'Shipping cost saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="po-money-row po-money-ship">
+        <span>Shipping</span>
+        {editable ? (
+          <button
+            type="button"
+            className={`po-ship-edit${po.shippingCost == null ? ' is-empty' : ''}`}
+            title="Click to set what the supplier charged for freight"
+            onClick={() => setEditing(true)}
+          >
+            <span className="mono">
+              {po.shippingCost == null ? 'Add' : formatMoney(po.shippingCost)}
+            </span>
+            <Icon name="Pencil" size={11} />
+          </button>
+        ) : (
+          <span className="mono">{formatMoney(po.shippingCost ?? 0)}</span>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="po-money-row po-money-ship is-editing">
+      <span>Shipping</span>
+      <div className="po-ship-form">
+        <Input
+          value={draft}
+          inputMode="decimal"
+          placeholder="0.00"
+          aria-label="Shipping cost"
+          autoFocus
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void save()
+            if (e.key === 'Escape') {
+              setDraft(po.shippingCost != null ? String(po.shippingCost) : '')
+              setEditing(false)
+            }
+          }}
+        />
+        <Button variant="primary" loading={busy} onClick={() => void save()}>
+          Save
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setDraft(po.shippingCost != null ? String(po.shippingCost) : '')
+            setEditing(false)
+          }}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
  * Shipping and payment on an EXISTING order.
  *
  * This is where a tracking number is actually entered, because it does not
  * exist when the PO is raised — it arrives in a shipping confirmation hours or
  * days later. Save appears only once something has changed, so the receipt does
  * not carry a button that usually does nothing.
+ *
+ * WHAT IT COSTS is not here — see ShippingCostEditor, which sits with the
+ * total. This panel writes through setFreight and moves no money; that one
+ * restates the total and the COGS row, and the two must not share a button.
  */
 function FreightEditor({
   po,

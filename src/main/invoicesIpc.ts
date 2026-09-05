@@ -28,6 +28,8 @@ import {
   nextStageFromQbo
 } from '@shared/invoices'
 import { currentUser } from './services/auth'
+import { invoiceLineSources } from './db/lineSources'
+import type { LineSources } from '@shared/lineSources'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import { applyOrderReset, previewOrderReset } from './db/orderReset'
 import type { NumberSeries, SeriesState } from '@shared/numbering'
@@ -40,6 +42,7 @@ import {
   countRenumberedInvoices,
   deleteInvoice,
   getInvoice,
+  rebookInvoiceStock,
   getInvoices,
   invoiceStats,
   listCustomers,
@@ -77,6 +80,7 @@ import {
   type QboCustomerRef,
   type QboItemRef
 } from './quickbooks/invoices'
+import { postQboPaymentFor } from './quickbooks/payments'
 import { fetchQboInvoiceStatuses, findQboInvoicesByDocNumber } from './quickbooks/invoiceStatus'
 import { getInvoiceDelivery, setInvoiceDelivery } from './quickbooks/store'
 import {
@@ -1113,6 +1117,84 @@ export function registerInvoicesIpc(): void {
   )
 
   /** Ask QuickBooks to email it. Separate from creating it — see the note there. */
+  /**
+   * Put the money in QuickBooks. Guarded by the same permission as sending.
+   *
+   * Returns ok with a SENTENCE for every ordinary refusal — nothing owing,
+   * already recorded, not in QuickBooks. Those are answers, and a screen that
+   * shows them as failures teaches people to dismiss a red box that sometimes
+   * means a real one. Only a transport or API fault comes back ok:false.
+   */
+  ipcMain.handle(
+    IPC.invoiceRecordQboPayment,
+    async (_e, id: unknown): Promise<Result<{ id: string; posted: boolean; message: string }>> => {
+      try {
+        requireInvoicing()
+        const target = str(id)
+        const invoice = getInvoice(target)
+        if (!invoice) return { ok: false, error: 'That invoice is gone.' }
+        const outcome = await postQboPaymentFor(target)
+        if (!outcome.ok) return { ok: false, error: outcome.error ?? outcome.plan.sentence }
+        return {
+          ok: true,
+          data: {
+            id: target,
+            posted: outcome.paymentId !== null,
+            message: outcome.plan.sentence
+          }
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Re-take the shelf for one order. Gated on the same permission as editing an
+   * order's lines, because that is what it is: the stock half of a save, run
+   * again with nothing else touched.
+   */
+  // READ-ONLY, and gated on the same permission as reading the order itself:
+  // this says nothing the order's own receipt does not already imply, it just
+  // says it where somebody can see it. See @shared/lineSources.
+  ipcMain.handle(IPC.invoiceLineSources, (_e, id: unknown): LineSources[] => {
+    try {
+      requireInvoicing()
+      return invoiceLineSources(str(id))
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle(
+    IPC.invoiceRebookStock,
+    (_e, id: unknown): Result<{ id: string; units: number; message: string }> => {
+      try {
+        const actor = requireInvoicing()
+        const target = str(id)
+        const res = rebookInvoiceStock(target, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        const units = res.units ?? 0
+        return {
+          ok: true,
+          data: {
+            id: target,
+            units,
+            // The count is the answer, including when it is zero: this cannot
+            // invent stock, and "still nothing on the shelf" is a different
+            // problem from "it worked" and must not read like one.
+            message:
+              units > 0
+                ? `${units} ${units === 1 ? 'unit' : 'units'} booked. The order is now in inventory, the history and the P&L.`
+                : 'Nothing was booked — there is still no stock on the shelf these lines draw from. Receive the goods first, then press this again.'
+          }
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
   ipcMain.handle(IPC.invoiceSendFromQbo, async (_e, id: unknown): Promise<Result<{ id: string }>> => {
     try {
       requireInvoicing()

@@ -12,6 +12,7 @@ import type {
   WhatnotRatePeriod
 } from '@shared/financeStreaming'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
+import type { RevenueCheck, StatementInput, WhatnotStatement } from '@shared/statementFit'
 import type { WholesaleSaleRow } from '@shared/invoices'
 import type {
   HistorySource,
@@ -74,6 +75,22 @@ export interface FinanceApi {
    *  next time the view is read — there is nothing to re-import. */
   saveRate(input: RatePeriodInput): Promise<Result<WhatnotRatePeriod[]>>
   deleteRate(id: string): Promise<Result<WhatnotRatePeriod[]>>
+  /** What the platform states a window sold — the only figure on this surface
+   *  that came from outside the app. Revenue here is derived from the net, so
+   *  without one of these there is nothing any of it can be checked against. */
+  statements(): Promise<WhatnotStatement[]>
+  saveStatement(input: StatementInput): Promise<Result<WhatnotStatement[]>>
+  deleteStatement(id: string): Promise<Result<WhatnotStatement[]>>
+  /** Compare a stated figure against what this app derives for the same days,
+   *  and solve the commission that would reproduce it. STORES NOTHING: saving
+   *  the fitted rate is a separate `saveRate`, and a separate decision. */
+  revenueCheck(input: {
+    fromDate: string
+    toDate: string
+    statedGross: number
+    /** What the platform actually paid out. Null when the document does not say. */
+    statedPayout?: number | null
+  }): Promise<RevenueCheck | null>
   /** Costs typed against a business day — product opened, given away or written
    *  off. A dollar amount only; nothing here moves stock. Both writes hand back
    *  the entries and the re-derived view, because one of them changes the bottom

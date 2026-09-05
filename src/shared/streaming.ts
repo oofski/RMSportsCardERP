@@ -347,6 +347,41 @@ export interface NewStreamItem {
    */
   casePrice?: number | null
   /**
+   * RECONCILIATION entry: TAKE IT OFF THE SHELF instead of pricing it.
+   *
+   * The owner: "when I am reconciling a break and putting something from the
+   * inventory then it needs to come in from the inventory and pull from there
+   * directly."
+   *
+   * ## Why a reconciliation does not do this by default
+   *
+   * Past the 24-hour window a show is history, and the ordinary reason a line is
+   * being entered late is that the stock has ALREADY gone — counted off, or
+   * reset from a count sheet, after the show. Deducting it again would take the
+   * same cases off the books twice and leave the product short by exactly the
+   * amount somebody was trying to be accurate about. So the default records a
+   * price and moves nothing.
+   *
+   * But the other case is just as real: the cases are still sitting on the
+   * shelf, nobody has counted them off, and what they cost is already known to
+   * the cent from the layers they arrived in. Typing a price there is worse than
+   * unnecessary — it invents a second, hand-keyed figure for stock the app can
+   * value exactly, and leaves the shelf holding cases that were opened on air.
+   *
+   * ## It is a choice, never an inference
+   *
+   * "There is stock on hand" does not prove the stock was not counted off — it
+   * could have been restocked since. Only the person at the bench knows which
+   * case they are in, so the form asks, and this carries the answer. Main
+   * refuses it when the shelf cannot cover the line, which is the one reading
+   * that is provably wrong.
+   *
+   * When it is set the line behaves EXACTLY like one entered inside the window:
+   * the count drops, the cost layers are consumed, and a stated price is refused
+   * rather than ignored.
+   */
+  fromShelf?: boolean
+  /**
    * Which cost layers this line takes its stock out of, as chosen in the picker.
    *
    * Absent means there was nothing to decide — one open layer, or several all at
@@ -422,6 +457,44 @@ export function streamDateOf(iso: string): string {
  * inventory."
  */
 export const RECONCILE_AFTER_MS = 24 * 60 * 60 * 1000
+
+/**
+ * CAN A RECONCILIATION TAKE THIS LINE OFF THE SHELF?
+ *
+ * One rule, in the contract, so the form's offer and the write's refusal are the
+ * same sentence. The form asks it to decide whether to show the choice at all;
+ * main asks it again before moving any stock, because a renderer check is a
+ * courtesy to the person typing and never a guarantee about what arrives.
+ *
+ * The shelf must cover the WHOLE line. A partial pull would book some of the
+ * cases at what they cost and the rest at nothing, which is a cost that looks
+ * precise and is not — and the operator who wanted the accurate number is
+ * exactly the one it would mislead.
+ */
+export function shelfCanCover(
+  onHand: number,
+  quantity: number
+): { ok: boolean; reason: string | null } {
+  const have = Number(onHand)
+  const want = Number(quantity)
+  if (!Number.isFinite(have) || have <= 0) {
+    return {
+      ok: false,
+      reason: 'There is none of this on the shelf at that location, so there is nothing to take it out of. Enter what one cost instead.'
+    }
+  }
+  if (!Number.isFinite(want) || want <= 0) return { ok: false, reason: 'Enter how many were opened.' }
+  // A hair of slack for the same reason every quantity comparison in this app
+  // carries one: a stored quantity is a rounded decimal, and refusing a line for
+  // a millionth of a case would be a refusal nobody could act on.
+  if (want > have + 1e-6) {
+    return {
+      ok: false,
+      reason: `The shelf holds ${have} at that location and this line opens ${want}. Take a smaller quantity off the shelf, or enter what one cost and leave the count alone.`
+    }
+  }
+  return { ok: true, reason: null }
+}
 
 /**
  * Is this session HISTORY — a show being RECONCILED rather than one being run?

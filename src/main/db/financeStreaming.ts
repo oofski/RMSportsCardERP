@@ -137,6 +137,7 @@ import {
   classifyLedgerRow,
   parseProductSaleName,
   deriveSaleFee,
+  scopeForBucket,
   emptyDayFinance,
   findCarryBackSession,
   ledgerFingerprintSource,
@@ -2743,7 +2744,26 @@ function buildView(db: Database): StreamingFinanceView {
     // fix when that ever happens is to end the period on the day BEFORE the show
     // whose night it should stop covering — which is what the dates on the rates
     // screen now say they mean.
-    const rates = rateAt(r.d)
+    // AND UNDER ITS OWN SCOPE, not just its own day.
+    //
+    // The rate used to be a function of the business day alone, so every row on
+    // a night was priced identically. Whatnot's commission is not one number —
+    // it depends on what was sold — so any night carrying both break spots and
+    // sealed product was priced wrong on some of them by construction.
+    //
+    // It stayed invisible because of where the error lands. The derived gross is
+    // the net with the modelled fee added back, and the fee is then subtracted
+    // again two sections down, so a wrong rate moves REVENUE and leaves net
+    // profit exactly where it was. The top line ran high for months while every
+    // bottom line looked correct.
+    //
+    // `r.bucket` is already selected here for the whole-product split, so the
+    // scope costs nothing to resolve: `sale` prices as break spots and
+    // `product_sale` as whole products, which is the split `classifyLedgerRow`
+    // already makes and `tests/marketplace.test.ts` pins against 9,225 real
+    // rows. A period with no scope still covers everything, so a database whose
+    // periods nobody has narrowed prices exactly as it did before.
+    const rates = rateAt(r.d, scopeForBucket(r.bucket))
     const fee = deriveSaleFee(r.cents, rates)
     const acc = feesByDay.get(r.d) ?? {
       grossCents: 0,

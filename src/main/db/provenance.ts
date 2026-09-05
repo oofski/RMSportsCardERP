@@ -31,7 +31,7 @@
  * split — naming one of two would send somebody to the wrong building.
  */
 
-import type { ShopBuy } from '@shared/availability'
+import type { ShopBuy, ShopShelfRow, ShopSale } from '@shared/availability'
 import type { PurchaseOrderStatus } from '@shared/types'
 import type { IncomingSource, StockProvenance, StockSource } from '@shared/provenance'
 import type { SupplyingOrder } from '@shared/poStock'
@@ -295,6 +295,7 @@ export function shopBuys(location: string, productId: string): ShopBuy[] {
     getDb()
       .prepare(
         `SELECT r.id            AS receipt_id,
+                r.po_line_id    AS po_line_id,
                 po.id           AS po_id,
                 po.po_number    AS po_number,
                 po.supplier     AS supplier,
@@ -317,6 +318,7 @@ export function shopBuys(location: string, productId: string): ShopBuy[] {
       )
       .all(id, place) as Array<{
       receipt_id: string
+      po_line_id: string
       po_id: string
       po_number: string
       supplier: string | null
@@ -331,6 +333,7 @@ export function shopBuys(location: string, productId: string): ShopBuy[] {
     }>
   ).map((r) => ({
     id: String(r.receipt_id),
+    poLineId: String(r.po_line_id),
     poId: String(r.po_id),
     poNumber: String(r.po_number),
     supplier: r.supplier ?? null,
@@ -398,5 +401,180 @@ export function supplyingOrders(
     unitsOnHand: num(r.on_hand),
     tabOpenedAt: r.tab_opened_at ?? null,
     tabClosedAt: r.tab_closed_at ?? null
+  }))
+}
+
+/**
+ * EVERYTHING ONE SHOP HAS HANDED OVER, and what became of it.
+ *
+ * The read behind the roadshow column. `stockAtLocation` answers "what can I
+ * sell from here" and this answers "what has this week done", which is the
+ * question somebody settling up with a shop is actually asking — and the one
+ * that had no screen, because a case bought and sold the same afternoon never
+ * appeared on the board at all.
+ *
+ * ## Every figure is COUNTED, and that is the design
+ *
+ * Three subqueries against three tables rather than one number and two
+ * subtractions. `bought` comes off the receipts, keyed on the shelf the case
+ * LANDED on — po_line_receipts.location, which stays put when a layer is later
+ * driven home. `here` is the live shelf. `sold` is what left on invoices.
+ *
+ * Inferring `sold` as bought − here would report a case carried back to RM as
+ * sold, which is a claim about money nobody received. Stock leaves a shelf three
+ * ways and a subtraction cannot tell them apart — so the third way gets its own
+ * figure, `movedOn`, and is zero on almost every row.
+ *
+ * ## What it lists
+ *
+ * Anything with a history OR a balance. A product bought and entirely sold has
+ * bought > 0 and here = 0 and belongs on the list — that is the whole ask.
+ * Something that arrived by transfer with no receipt behind it has here > 0 and
+ * bought = 0 and belongs too, because it is standing there and can be sold.
+ *
+ * Void invoices are excluded from `sold` for the reason they are excluded
+ * everywhere: voiding releases the stock, so those units are back on the shelf
+ * and counting them as sold would double-count them against `here`.
+ */
+export function shopShelf(location: string): ShopShelfRow[] {
+  const place = String(location ?? '').trim()
+  if (!place) return []
+  return (
+    getDb()
+      .prepare(
+        `WITH bought AS (
+           SELECT l.product_id AS pid, SUM(r.quantity) AS n
+             FROM po_line_receipts r
+             JOIN purchase_order_lines l ON l.id = r.po_line_id
+             JOIN purchase_orders po ON po.id = r.po_id
+            WHERE LOWER(TRIM(COALESCE(r.location, ''))) = LOWER(?)
+              AND po.status != 'cancelled'
+            GROUP BY l.product_id
+         ),
+         here AS (
+           SELECT product_id AS pid, SUM(quantity) AS n
+             FROM inventory_stock
+            WHERE LOWER(TRIM(location)) = LOWER(?)
+            GROUP BY product_id
+         ),
+         sold AS (
+           SELECT m.product_id AS pid, SUM(m.quantity) AS n
+             FROM invoice_stock_moves m
+             JOIN invoices i ON i.id = m.invoice_id
+            WHERE LOWER(TRIM(m.location)) = LOWER(?)
+              AND i.status != 'void'
+            GROUP BY m.product_id
+         ),
+         -- STILL HERE AND STILL UNPRICED. Off the LAYERS rather than the tab's
+         -- lines, because a line of six that has sold five leaves one unpriced
+         -- unit standing and the line count cannot say so. qty_remaining is what
+         -- is actually there; price_pending is whether anybody has said what it
+         -- cost.
+         unpriced AS (
+           SELECT lot.product_id AS pid, SUM(lot.qty_remaining) AS n
+             FROM inventory_lots lot
+             JOIN po_line_receipts r ON r.lot_id = lot.id
+             JOIN purchase_order_lines pl ON pl.id = r.po_line_id
+            WHERE LOWER(TRIM(lot.location)) = LOWER(?)
+              AND lot.qty_remaining > 0
+              AND pl.price_pending = 1
+            GROUP BY lot.product_id
+         ),
+         every_product AS (
+           SELECT pid FROM bought UNION SELECT pid FROM here UNION SELECT pid FROM sold
+         )
+         SELECT p.id, p.name, p.sku, p.category,
+                COALESCE(b.n, 0) AS bought,
+                COALESCE(h.n, 0) AS here,
+                COALESCE(s.n, 0) AS sold,
+                COALESCE(u.n, 0) AS unpriced_here
+           FROM every_product e
+           JOIN inventory_products p ON p.id = e.pid
+           LEFT JOIN bought   b ON b.pid = e.pid
+           LEFT JOIN here     h ON h.pid = e.pid
+           LEFT JOIN sold     s ON s.pid = e.pid
+           LEFT JOIN unpriced u ON u.pid = e.pid
+          WHERE COALESCE(b.n, 0) > 0 OR COALESCE(h.n, 0) > 0 OR COALESCE(s.n, 0) > 0
+          ORDER BY p.name ASC`
+      )
+      .all(place, place, place, place) as Array<{
+      id: string
+      name: string
+      sku: string | null
+      category: string | null
+      bought: number
+      here: number
+      sold: number
+      unpriced_here: number
+    }>
+  ).map((r) => {
+    const bought = Number(r.bought) || 0
+    const here = Number(r.here) || 0
+    const sold = Number(r.sold) || 0
+    return {
+      productId: r.id,
+      name: r.name,
+      sku: r.sku ?? null,
+      category: r.category ?? null,
+      bought,
+      here,
+      sold,
+      // Never negative: a shelf topped up by transfer legitimately holds more
+      // than it ever bought, and a negative "moved on" would be nonsense on a
+      // card rather than a diagnostic.
+      movedOn: Math.max(0, bought - here - sold),
+      unpricedHere: Math.max(0, Math.min(here, Number(r.unpriced_here) || 0))
+    }
+  })
+}
+
+/**
+ * WHERE THIS PRODUCT WENT, off this shop's shelf.
+ *
+ * The other half of `shopBuys`. That one answers "which purchase order did these
+ * arrive on"; this answers "which sale took them", and until now nothing did —
+ * so a case bought and sold at a shop in one afternoon left two documents and no
+ * way to get from the shelf to either.
+ *
+ * Keyed on `invoice_stock_moves.location`, which records the shelf each slice
+ * actually came off. A sale that took four from RM and one from Kentucky appears
+ * here as the one, which is the honest answer to "what did this shop supply".
+ *
+ * Void orders are left out for the reason they are everywhere: voiding releases
+ * the stock, so those units are back on the shelf and were never sold.
+ */
+export function shopSales(location: string, productId: string): ShopSale[] {
+  const place = String(location ?? '').trim()
+  const id = String(productId ?? '').trim()
+  if (!place || !id) return []
+  return (
+    getDb()
+      .prepare(
+        `SELECT i.id, i.invoice_number, i.customer_name, i.invoice_date, i.status,
+                SUM(m.quantity) AS qty
+           FROM invoice_stock_moves m
+           JOIN invoices i ON i.id = m.invoice_id
+          WHERE m.product_id = ?
+            AND LOWER(TRIM(m.location)) = LOWER(?)
+            AND i.status != 'void'
+          GROUP BY i.id
+         HAVING SUM(m.quantity) > 0
+          ORDER BY i.invoice_date DESC, i.rowid DESC`
+      )
+      .all(id, place) as Array<{
+      id: string
+      invoice_number: string | null
+      customer_name: string | null
+      invoice_date: string
+      status: string
+      qty: number
+    }>
+  ).map((r) => ({
+    invoiceId: String(r.id),
+    invoiceNumber: (r.invoice_number ?? '').trim(),
+    customerName: (r.customer_name ?? '').trim(),
+    soldOn: r.invoice_date,
+    quantity: Number(r.qty) || 0,
+    status: String(r.status)
   }))
 }

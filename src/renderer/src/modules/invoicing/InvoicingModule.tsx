@@ -9,6 +9,7 @@ import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { isTab } from '@shared/roadshowTab'
+import { purchaseOrderIsOwed } from '@shared/purchaseOrders'
 import { RoadshowBoard } from './RoadshowBoard'
 import { useToast } from '../../components/Toast'
 import { Button, CenterLoader, Modal } from '../../components/ui'
@@ -139,33 +140,19 @@ export function InvoicingModule({
     [reload, toast]
   )
 
-  /**
-   * Record a payment. Deliberately NOT `move` with a 'paid' argument — the card
-   * does not go anywhere, because an order that arrived before it was paid for
-   * has not gone backwards up the board.
-   */
-  /**
-   * BOTH WAYS, because the button that only went one way was a trap.
+  /*
+   * PAYING IS A DIALOG NOW, and it lives on the board.
    *
-   * `setPurchaseOrderPaid` has always taken a boolean and has always logged
-   * "Payment un-marked" for the false case — it was reachable from nothing. A
-   * payment ticked on the wrong card had no way back at all, and the only thing
-   * that cleared `paid_at` was cancelling the order and reopening it, which
-   * reverses stock and voids the purchase's cost to fix a mis-click on a
-   * different question entirely.
+   * There was a `markPaid` callback here: one toggle, `setPaid(id, !paidAt)`,
+   * which could say the whole total went or that none of it had and nothing in
+   * between. The owner: "sometimes we pay part of a PO." A toggle cannot record
+   * that, so the board opens PayPoModal instead and does its own writing and its
+   * own toasts, and all this page owes it is `onReload`.
+   *
+   * `api.purchaseOrders.setPaid` is untouched and still used — the receipt view
+   * calls it, and it now writes a payment for whatever is outstanding rather
+   * than stamping `paid_at` behind the payments' back.
    */
-  const markPaid = useCallback(
-    async (id: string, poNumber: string, paid: boolean) => {
-      const res = await api.purchaseOrders.setPaid(id, paid)
-      if (!res.ok) {
-        toast.error(res.error ?? (paid ? 'Could not record the payment.' : 'Could not undo that.'))
-        return
-      }
-      toast.success(paid ? `${poNumber} is marked paid.` : `${poNumber} is no longer marked paid.`)
-      await reload()
-    },
-    [reload, toast]
-  )
 
   /**
    * THE WAY BACK TO THE BUYER-ASSIGNMENT SCREEN.
@@ -275,11 +262,28 @@ export function InvoicingModule({
     [reload, stuck, toast]
   )
 
-  const openPos = useMemo(
-    () => pos.filter((p) => p.status === 'ordered' || p.status === 'paid'),
-    [pos]
-  )
-  const committed = useMemo(() => openPos.reduce((sum, p) => sum + p.total, 0), [openPos])
+  /**
+   * EVERY ORDER WITH MONEY STILL OWED ON IT, in whatever column it stands.
+   *
+   * This filtered on the STAGE — `'ordered' || 'paid'` — and got both halves
+   * wrong, which is visible on the board itself:
+   *
+   *   · RECEIVED WAS MISSING ENTIRELY. Six orders worth $118,968 sat in the
+   *     Received column, every card wearing an "Unpaid" chip, while the tile
+   *     above them said 6 open and $145.7K. The screen was contradicting
+   *     itself in one glance: the chips said unpaid, the total left them out.
+   *     An order that has ARRIVED and not been paid for is the most owed
+   *     money on the board, not the least.
+   *   · 'PAID' WAS COUNTED IN. That column means the supplier has been
+   *     settled with, so its money is gone — counting it as committed says
+   *     the business owes what it has already handed over.
+   *
+   * `purchaseOrderIsOwed` is the one rule, shared with the Unpaid chip on the
+   * cards and with the owner board's payables. The tile and the cards under it
+   * cannot disagree again, because they now read the same function.
+   */
+  const openPos = useMemo(() => pos.filter((p) => purchaseOrderIsOwed(p)), [pos])
+  const unpaidTotal = useMemo(() => openPos.reduce((sum, p) => sum + p.total, 0), [openPos])
   /**
    * Which view of the buying is on screen.
    *
@@ -334,9 +338,14 @@ export function InvoicingModule({
             </div>
             <div className="po-page-stat">
               <span className="po-page-stat-val mono">
-                {formatMoney(committed, { compact: true })}
+                {formatMoney(unpaidTotal, { compact: true })}
               </span>
-              <span className="po-page-stat-label">Committed</span>
+              {/* "Committed" described the old, wrong arithmetic — money
+                  promised to a supplier and not yet landed, which is why a
+                  received order looked like it had stopped counting. The
+                  figure is what is still OWED, in every column, so it says
+                  that and matches the word on the cards. */}
+              <span className="po-page-stat-label">Unpaid</span>
             </div>
           </div>
           {/* The actions travel together. Loose siblings after a margin-left:auto
@@ -388,7 +397,7 @@ export function InvoicingModule({
             supplyOrders={supplyOrders}
             canManageSupplies={canManageSupplies}
             onDeletePo={canManage ? removePo : undefined}
-            onMarkPaid={markPaid}
+            onReload={canManage ? reload : undefined}
             onBillBuyers={billBuyers}
             thumbnails={thumbnails}
             onMove={move}

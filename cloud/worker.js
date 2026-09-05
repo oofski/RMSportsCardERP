@@ -2588,6 +2588,20 @@ const QBO_REFRESH_LEASE_MS = 30 * 1000
 
 /** How long a waiter will sit out somebody else's refresh before giving up. */
 const QBO_REFRESH_WAIT_MS = 6 * 1000
+/**
+ * HOW LONG THIS WORKER WILL WAIT ON INTUIT before giving up on its behalf.
+ *
+ * There was no such limit, and that is why a stuck call produced nothing at all
+ * rather than an error. The app asks the relay, the relay asks Intuit, and if
+ * Intuit does not answer the relay waits for ever — so the only thing anybody
+ * ever observed was the APP giving up, reported as "aborted", which names the
+ * wrong end of the chain and carries no information about the other one.
+ *
+ * Twenty seconds. Longer than any healthy Intuit round trip by a wide margin,
+ * and short enough to come back inside the app's own patience so the answer
+ * arrives as a sentence rather than as silence.
+ */
+const QBO_UPSTREAM_TIMEOUT_MS = 20 * 1000
 const QBO_REFRESH_POLL_MS = 250
 
 let qboTableReady = false
@@ -2815,16 +2829,47 @@ function qboBasicAuth(conn) {
   return 'Basic ' + btoa(`${conn.clientId}:${conn.clientSecret}`)
 }
 
+/**
+ * Every call OUT of this Worker goes through here, so none of them can be
+ * written without a deadline.
+ *
+ * The `stage` is the point of it. "Intuit did not answer" is better than
+ * silence, but "Intuit did not answer while REFRESHING THE TOKEN" and "while
+ * fetching the invoice" send somebody to two different places: the first is a
+ * connection that needs re-authorising, the second is Intuit being unwell. The
+ * hang gave neither.
+ */
+async function qboUpstream(url, init, stage) {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(QBO_UPSTREAM_TIMEOUT_MS) })
+  } catch (err) {
+    const name = (err && err.name) || ''
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      throw new Error(
+        `Intuit did not answer within ${Math.round(QBO_UPSTREAM_TIMEOUT_MS / 1000)} seconds while ` +
+          `${stage}. That is Intuit or the connection to it, not the relay and not this app - the ` +
+          'relay reached the point of asking and got nothing back. If it keeps happening, ' +
+          're-authorise QuickBooks under Invoices then QuickBooks.'
+      )
+    }
+    throw new Error(`The relay could not reach Intuit while ${stage}: ${(err && err.message) || err}`)
+  }
+}
+
 async function qboPostToken(conn, form) {
-  const res = await fetch(QBO_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      authorization: qboBasicAuth(conn),
-      'content-type': 'application/x-www-form-urlencoded',
-      accept: 'application/json'
+  const res = await qboUpstream(
+    QBO_TOKEN_URL,
+    {
+      method: 'POST',
+      headers: {
+        authorization: qboBasicAuth(conn),
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'application/json'
+      },
+      body: form.toString()
     },
-    body: form.toString()
-  })
+    'refreshing the QuickBooks token'
+  )
   const text = await res.text()
   let parsed = {}
   try {
@@ -2994,25 +3039,35 @@ async function qboFetch(env, conn, call) {
         new Blob([call.upload.bytes], { type: call.upload.mimeType }),
         call.upload.fileName
       )
-      return fetch(url.toString(), {
-        method: 'POST',
-        // NO content-type header. fetch sets multipart/form-data WITH the
-        // boundary it generated; naming the type here without the boundary
-        // produces a body Intuit cannot parse.
-        headers: { authorization: `Bearer ${state.accessToken}`, accept: 'application/json' },
-        body: form
-      })
+      return qboUpstream(
+        url.toString(),
+        {
+          method: 'POST',
+          // NO content-type header. fetch sets multipart/form-data WITH the
+          // boundary it generated; naming the type here without the boundary
+          // produces a body Intuit cannot parse.
+          headers: { authorization: `Bearer ${state.accessToken}`, accept: 'application/json' },
+          body: form
+        },
+        'uploading the attachment to QuickBooks'
+      )
     }
 
-    return fetch(url.toString(), {
-      method: call.method || 'GET',
-      headers: {
-        authorization: `Bearer ${state.accessToken}`,
-        accept: 'application/json',
-        ...(call.body !== undefined && call.body !== null ? { 'content-type': 'application/json' } : {})
+    return qboUpstream(
+      url.toString(),
+      {
+        method: call.method || 'GET',
+        headers: {
+          authorization: `Bearer ${state.accessToken}`,
+          accept: 'application/json',
+          ...(call.body !== undefined && call.body !== null
+            ? { 'content-type': 'application/json' }
+            : {})
+        },
+        body: call.body !== undefined && call.body !== null ? JSON.stringify(call.body) : undefined
       },
-      body: call.body !== undefined && call.body !== null ? JSON.stringify(call.body) : undefined
-    })
+      `calling QuickBooks (${call.path})`
+    )
   }
 
   let res = await send(live)
@@ -3506,15 +3561,23 @@ async function qboApi(request, env, path) {
       // Tell Intuit if we can, but never let that stop the disconnect — a network
       // failure must not leave the relay stuck claiming a connection.
       try {
-        await fetch(QBO_REVOKE_URL, {
-          method: 'POST',
-          headers: {
-            authorization: qboBasicAuth(conn),
-            'content-type': 'application/json',
-            accept: 'application/json'
+        // Bounded like every other call out of here. Best effort still has to
+        // END: a revoke that hangs would hold the disconnect open for as long
+        // as Intuit stayed quiet, which is the same fault this whole change is
+        // about, on the one route somebody presses when things are already wrong.
+        await qboUpstream(
+          QBO_REVOKE_URL,
+          {
+            method: 'POST',
+            headers: {
+              authorization: qboBasicAuth(conn),
+              'content-type': 'application/json',
+              accept: 'application/json'
+            },
+            body: JSON.stringify({ token: conn.refreshToken })
           },
-          body: JSON.stringify({ token: conn.refreshToken })
-        })
+          'revoking the QuickBooks connection'
+        )
       } catch {
         /* best effort */
       }

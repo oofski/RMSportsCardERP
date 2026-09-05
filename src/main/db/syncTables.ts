@@ -94,7 +94,23 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_customers', key: ['id'], tier: 0 },
   { table: 'ship_settings', key: ['key'], tier: 0 },
   { table: 'ship_batch_urls', key: ['batch_number'], tier: 0 },
-  { table: 'ship_break_audit', key: ['break_label'], tier: 0 },
+  /**
+   * BY break_id, WHICH IS THE PRIMARY KEY — and it was by break_label, which is
+   * not a key at all.
+   *
+   * The upsert is built as ON CONFLICT (<these columns>), so a key that names no
+   * PRIMARY KEY and no UNIQUE index is not a merge that picks the wrong winner:
+   * it is SQL SQLite refuses to run. Every row of this table was rejected on
+   * arrival, in the batch and again on the row-by-row retry, and landed in
+   * sync_rejects under "usually the same thing created twice" — which is exactly
+   * what it was not.
+   *
+   * break_id is safe to merge on for the same reason ship_breaks is: it IS
+   * ship_breaks.id, which already travels under that id, and it comes off the
+   * parsed slip rather than being minted per machine. Both writers here key on
+   * it, and the audit is one row per break.
+   */
+  { table: 'ship_break_audit', key: ['break_id'], tier: 0 },
   { table: 'ship_imports', key: ['id'], tier: 0 },
   // The packing slip itself, in slices. Tier 0 because a slice points at nothing
   // — it carries its own document's metadata precisely so it does not have to
@@ -133,6 +149,10 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // order, and the rates screen shows both, which is the state somebody has to
   // resolve rather than one the app should silently pick a winner for.
   { table: 'whatnot_fee_periods', key: ['id'], tier: 0 },
+  // What the platform said a window sold. Synced because it is the evidence a
+  // derived revenue figure is checked against, and a check only one machine can
+  // see is one the others quietly go without.
+  { table: 'whatnot_statements', key: ['id'], tier: 0 },
   // Synced, on the same argument that put the rate periods above it here: it
   // changes the reported bottom line of a day. A laptop missing an entry the
   // owner typed would show a HIGHER net profit for that night than the machine he
@@ -297,6 +317,13 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'message_participants', key: ['id'], tier: 1 },
   { table: 'messages', key: ['id'], tier: 1 },
   { table: 'purchase_order_lines', key: ['id'], tier: 1 },
+  // Money on an order that bought no goods — see PurchaseOrderAdjustment. It
+  // travels for the same reason a line does: it changes the order's total, and
+  // a machine holding the lines without the credits would price the same
+  // purchase differently from the one beside it. Tier 1 puts it after the
+  // purchase_orders header it points at.
+  { table: 'purchase_order_adjustments', key: ['id'], tier: 1 },
+  { table: 'purchase_order_payments', key: ['id'], tier: 1 },
   { table: 'supply_transactions', key: ['id'], tier: 1 },
   { table: 'supply_orders', key: ['id'], tier: 1 },
   { table: 'finance_cogs', key: ['id'], tier: 1 },
@@ -376,7 +403,77 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // them. Tier 2: it names a transaction, and a composition arriving before the
   // movement it explains would be a set of slices attached to nothing.
   { table: 'inventory_txn_lots', key: ['id'], tier: 2 },
-  { table: 'ledger_row_imports', key: ['row_id', 'import_id'], tier: 2 }
+  { table: 'ledger_row_imports', key: ['row_id', 'import_id'], tier: 2 },
+  /**
+   * WHAT A SALE TOOK OFF THE SHELF, and what those goods cost.
+   *
+   * THIS WAS MISSING, and it is the quietest kind of missing: the sales order
+   * travelled, its lines travelled, and the cost layers travelled with their
+   * remainders already reduced — so `inventory_stock` rebuilt to the right
+   * number on every machine and the quantities all agreed. Only the RECEIPT
+   * linking the sale to the layers it consumed stayed behind, which meant that
+   * on every laptop but the one that raised the order:
+   *
+   *   - the order showed no cost of goods, so it read as pure margin
+   *     (orderHistory reads the cost from here, not from the lines);
+   *   - voiding it could not put the stock back, because nothing said what to
+   *     put back;
+   *   - a roadshow shop's "sold" column counted zero, because that count comes
+   *     off these rows.
+   *
+   * Nothing looked broken. The order was there, the numbers were there, and one
+   * of them was wrong.
+   *
+   * Tier 2: it names an INVOICE and an INVENTORY TRANSACTION, both tier 1, so it
+   * has to land after whichever arrives last on the row-at-a-time recovery path
+   * or it is a receipt for nothing. It does NOT depend on invoice_lines despite
+   * pointing at one — `line_position` is an ordinal, not a foreign key.
+   */
+  { table: 'invoice_stock_moves', key: ['id'], tier: 2 }
+]
+
+/**
+ * TABLES THAT DELIBERATELY DO NOT TRAVEL, and why — as a list a test can read
+ * rather than prose a test cannot.
+ *
+ * The reasons are written out above in the module header. This exists because
+ * that header could not be checked: `invoice_stock_moves` was absent from both
+ * the synced list and the header's account of what is deliberately absent, and
+ * nothing anywhere could tell that omission from a decision. A table added to
+ * the schema now fails the completeness test until somebody puts it in one list
+ * or the other, which is the whole point — the choice has to be MADE, not
+ * defaulted into by forgetting.
+ */
+export const NEVER_SYNCED: readonly string[] = [
+  // Machine-local by definition: sessions, and the bench somebody is stood at.
+  'server_sessions',
+  'ship_station_sessions',
+  // Secrets and per-machine settings. Sealed with safeStorage on the machine
+  // that holds them, and must never leave it.
+  'meta',
+  // DERIVED on arrival, not carried. See the module header.
+  'inventory_stock',
+  // Rows point at files this machine holds; the bytes travel as *_parts.
+  'inventory_product_images',
+  'ship_documents',
+  'order_documents',
+  // The sync plumbing itself.
+  'sync_control',
+  'sync_outbox',
+  'sync_rejects',
+  'sync_state',
+  /**
+   * NOT A DECISION — A GAP, recorded here so it stops being invisible.
+   *
+   * Both are shared operational facts that plainly ought to travel: the packing
+   * SOP ticks for a day, and what supplies a shift consumed. They are listed as
+   * exclusions only so the completeness test can pass while naming them, and
+   * they should move up into SYNCED_TABLES when somebody works out the tier and
+   * can test it. They are left alone here because this change is about a sale's
+   * stock receipt and widening it would put two untested tables on the wire.
+   */
+  'ship_sop_steps',
+  'ship_supply_usage'
 ]
 
 /** Lookup by table name. */

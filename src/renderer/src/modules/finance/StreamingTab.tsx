@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { LIVE, useLiveRefresh } from '../../lib/live'
-import type { StreamingFinanceView } from '@shared/financeStreaming'
-import { Button, CenterLoader } from '../../components/ui'
+import type { StreamingFinanceView, WhatnotRatePeriod } from '@shared/financeStreaming'
+import { describeImportStanding, importStanding } from '@shared/financeStreaming'
+import { checkWindow, reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
+import type { WhatnotStatement } from '@shared/statementFit'
+import { Icon } from '../../components/Icon'
+import { compactDayLabel } from './time'
+import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { useSession } from '../../lib/session'
-import { Note } from './bits'
+import { Money, Note } from './bits'
 import { Expenses } from './Expenses'
 import { FinanceCalendar } from './FinanceCalendar'
-import { ImportPanel } from './ImportPanel'
-import { Provenance } from './Provenance'
 import { RangeBar } from './RangeBar'
 import { RangeStatement } from './Statement'
 import { RangeWidgets } from './Widgets'
@@ -61,6 +64,27 @@ export function StreamingTab(): JSX.Element {
   const toast = useToast()
 
   const [view, setView] = useState<StreamingFinanceView | null>(null)
+  /**
+   * The rate periods, read only so this tab can say when a night was priced at
+   * terms nobody chose. See the banner below.
+   *
+   * Fetched here rather than folded into the view because the answer depends on
+   * the SELECTED RANGE, which only this tab knows — and because reusing the same
+   * reconRows the Fees tab reads means the two screens cannot report different
+   * uncovered figures.
+   */
+  const [periods, setPeriods] = useState<WhatnotRatePeriod[]>([])
+  /**
+   * What Whatnot itself says a window sold — the only figures reachable from
+   * this tab that did not come out of the app.
+   *
+   * Read here for the same reason the rate periods are: which of them is
+   * relevant depends on the SELECTED RANGE, and only this tab knows that. An
+   * empty list is not an error state — it is the honest 'never' answer, and it
+   * is also where a failed read lands, because "nothing has ever been saved to
+   * check this against" is exactly what is true when the app cannot tell.
+   */
+  const [statements, setStatements] = useState<WhatnotStatement[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -78,6 +102,32 @@ export function StreamingTab(): JSX.Element {
       try {
         const next = await finance.streamView()
         if (alive) setView(next)
+        // Failing to read either of these must not blank the tab: the numbers are
+        // still worth showing, the coverage warning simply is not available, and
+        // the revenue standing degrades to "no figure has ever been saved" —
+        // which is the truthful answer when the app cannot tell, and the one
+        // thing this line must never do is claim agreement it did not check.
+        // CALLED BEHIND A typeof GUARD, not just wrapped in .catch. On a build
+        // whose preload predates saved figures, `finance.statements` is
+        // undefined and calling it throws a TypeError SYNCHRONOUSLY, while the
+        // array literal is still being evaluated — before the .catch beside it
+        // has been attached to anything. The rejection then escapes to the outer
+        // catch and blanks the entire tab with "the streaming ledger could not be
+        // read", over a line that is only a disclosure. Main and renderer ship as
+        // separate artifacts and can skew; RatesTab already guards this exact
+        // call for this exact reason.
+        const [rates, stated] = await Promise.all([
+          typeof finance.rates === 'function'
+            ? finance.rates().catch(() => [] as WhatnotRatePeriod[])
+            : Promise.resolve([] as WhatnotRatePeriod[]),
+          typeof finance.statements === 'function'
+            ? finance.statements().catch(() => [] as WhatnotStatement[])
+            : Promise.resolve([] as WhatnotStatement[])
+        ])
+        if (alive) {
+          setPeriods(rates)
+          setStatements(stated)
+        }
       } catch (err) {
         if (alive) {
           setError(err instanceof Error ? err.message : 'The streaming ledger could not be read.')
@@ -96,6 +146,64 @@ export function StreamingTab(): JSX.Element {
   useLiveRefresh(LIVE.finance, () => setAttempt((n) => n + 1))
 
   const applyView = useCallback((next: StreamingFinanceView) => setView(next), [])
+
+  /**
+   * The one line that survives the move to Admin. Built from the same function
+   * the Admin tile uses, so a pointer promising nothing is wrong can never sit
+   * above a tile listing four unreadable rows.
+   */
+  const standing = useMemo(() => importStanding(view?.imports ?? []), [view?.imports])
+
+  /**
+   * How much of the money on screen was priced at terms NOBODY CHOSE.
+   *
+   * `effectiveFeeRates` falls back to the built-in 8% for any business day no
+   * rate period covers, and it does so silently. That is not a small default:
+   * revenue here is the net with the modelled fee added back, so pricing a night
+   * at 8% when the real commission is 4% invents about 4.8 cents of revenue per
+   * dollar Whatnot actually paid — around $19k on a $400k month. It moves no
+   * bottom line, because the fee is subtracted again two sections down, which is
+   * exactly why nothing caught it.
+   *
+   * Sized in MONEY, never in nights. Four uncovered Tuesdays worth $40 between
+   * them is a footnote; one uncovered Saturday that took $60,000 is the whole
+   * discrepancy, and a count cannot tell those apart — the same argument
+   * `reconTotals` already makes for the figure it returns.
+   */
+  const uncovered = useMemo(() => {
+    if (!view || periods.length === 0) return null
+    const rows = reconInRange(
+      reconRows(view.days, periods),
+      range?.from ?? '',
+      range?.to ?? ''
+    )
+    const t = reconTotals(rows)
+    return t.uncoveredNetPaid > 0 ? t : null
+  }, [view, periods, range])
+
+  /**
+   * WHAT THIS SCREEN IS ENTITLED TO SAY ABOUT ITS OWN TOP LINE.
+   *
+   * The window is judged FIRST and separately, by `checkWindow`, because this
+   * tab opens on all-time and all-time is not a period any statement covers. A
+   * figure typed off one month's document compared against every night ever
+   * imported produces a gap the size of the rest of the ledger, and the screen
+   * reports it with a straight face — that is not hypothetical, it is where the
+   * $24k on the Fees & rates tab came from. Blank ends are a legitimate
+   * selection for the table below and an impossible one for a comparison; the
+   * difference is in the CLAIM, not in the filter. See the block comment in
+   * @shared/pnlRecon, which spells out why `reconInRange` must keep treating a
+   * blank end as open while this refuses it.
+   *
+   * The derived figure is deliberately absent from what is handed over. The
+   * widgets own it — it is the number they print — so passing them the window
+   * and the saved statements is what keeps the sentence and the tile above it
+   * from ever quoting different revenues.
+   */
+  const againstWhatnot = useMemo(
+    () => ({ window: checkWindow(range?.from ?? '', range?.to ?? ''), statements }),
+    [range, statements]
+  )
 
   /**
    * Re-run attribution over every stored row.
@@ -218,13 +326,27 @@ export function StreamingTab(): JSX.Element {
 
   const { imports } = view
 
-  // Nothing has ever been uploaded. The upload is the only thing anyone can do
-  // here, so it gets the page to itself rather than sitting under four empty
-  // panels explaining what they would say if it had.
+  /**
+   * Nothing has ever been uploaded.
+   *
+   * This used to BE the uploader — the panel had the page to itself, because
+   * uploading was the only thing anyone could do here. Now that uploading lives
+   * in Admin, the empty state has to say where it went: a tab that goes blank
+   * with no way forward is worse than the four empty panels the old comment was
+   * arguing against.
+   */
   if (imports.length === 0) {
     return (
       <div className="fin-stream">
-        <ImportPanel imports={imports} canManage={canManage} onView={applyView} />
+        <EmptyState
+          icon="Upload"
+          title="No ledger has been uploaded yet"
+          message={
+            canManage
+              ? 'Upload Whatnot’s export in Admin → Ledger, and every figure on this tab appears.'
+              : 'Once somebody uploads Whatnot’s export in Admin → Ledger, this tab fills in.'
+          }
+        />
       </div>
     )
   }
@@ -247,6 +369,31 @@ export function StreamingTab(): JSX.Element {
         </Note>
       )}
 
+      {/* SECOND, and at the same weight. The reconcile banner above says the rows
+          do not add up; this one says they add up to a figure priced on terms
+          nobody set. Both make every number below untrustworthy, and only one of
+          them used to be said out loud. */}
+      {uncovered && (
+        <Note tone="warn" icon="AlertTriangle" role="alert">
+          <b>
+            <Money value={uncovered.uncoveredNetPaid} /> of this was priced at the standard rates,
+            not yours.
+          </b>
+          <p>
+            {uncovered.uncoveredDays === 1
+              ? 'One night in this range is not covered by any rate period'
+              : `${uncovered.uncoveredDays} nights in this range are not covered by any rate period`}
+            , so they were charged at the built-in 8% commission and 2.9% card fee. If your real
+            terms are lower, revenue for those nights reads high — and only revenue, which is why
+            the profit below still looks right.
+          </p>
+          <p>
+            Set a rate period covering them in <b>Fees &amp; rates</b>, or use the revenue check
+            there to work out what the commission must have been.
+          </p>
+        </Note>
+      )}
+
       <section className="fin-head" aria-label="Streaming profit and loss">
         <div className="fin-head-top">
           <h2>Streaming</h2>
@@ -261,6 +408,7 @@ export function StreamingTab(): JSX.Element {
           priorLabel={
             prior ? `previous ${daySpan(prior.range.from, prior.range.to)} days` : null
           }
+          againstWhatnot={againstWhatnot}
         />
       </section>
 
@@ -298,7 +446,20 @@ export function StreamingTab(): JSX.Element {
           and this is about a number that came from a person. */}
       <Expenses range={range} canManage={canManage} onView={applyView} />
 
-      <Provenance view={view} canManage={canManage} onView={applyView} />
+      {/* WHERE THE NUMBERS CAME FROM, in one line.
+          The upload box and the import history moved to Admin, so this tab is
+          about the money. But a screen reporting revenue must not go silent
+          about a reason its revenue could be wrong, so the line stays and says
+          plainly when something needs a person — see importStanding, which the
+          Admin tile is built from too, so the two cannot disagree. */}
+      <p className={`fin-imports-note${standing.needsAttention ? ' needs-attention' : ''}`}>
+        <Icon name={standing.needsAttention ? 'AlertTriangle' : 'Upload'} size={14} />
+        <span>
+          {describeImportStanding(standing)}
+          {standing.lastImportAt ? `, last on ${compactDayLabel(standing.lastImportAt.slice(0, 10))}` : ''}
+          . Uploading and import history are in <b>Admin → Ledger</b>.
+        </span>
+      </p>
     </div>
   )
 }

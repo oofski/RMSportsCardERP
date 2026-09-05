@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { PurchaseOrder } from '@shared/types'
-import type { StockAtLocationRow } from '@shared/availability'
-import { ROADSHOW_SHOPS } from '@shared/roadshowTab'
+import type { ShopShelfRow } from '@shared/availability'
+import { ROADSHOW_SHOPS, emptyShelfHeadline, unpricedTabWarning } from '@shared/roadshowTab'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader } from '../../components/ui'
 import { useToast } from '../../components/Toast'
@@ -29,15 +30,20 @@ import { ShopBuysPanel } from './ShopBuysPanel'
  *
  * Four columns. Pick a shop, add what you bought, look at what is there.
  *
- * ## The columns are the SHELVES, not the tabs
+ * ## The columns list WHAT THE SHOP HAS HANDED OVER, and what became of it
  *
- * Read from `stockAtLocation` — the same table a sales order draws from — rather
- * than from the open tab's lines. The tab is what was BOUGHT and the shelf is
- * what is THERE, and after the first sale those stop being the same number: a
- * case sold out of Kentucky stays on the tab for ever, and a case that reached
- * Kentucky any other way was never on one. Reading the shelf means this board
- * and the sales order can never disagree about what is available, which is the
- * only property that makes the board worth looking at.
+ * They used to list `stockAtLocation` — what is standing there — and that hid
+ * the busiest days. A case bought at a shop and sold out of it the same
+ * afternoon never appeared at all, so a shop that had traded all day read as
+ * empty, and the only trace was a line on a tab nobody had opened. The owner:
+ * "anything that is sold from the roadshow shops should still show up on the
+ * list ... it shows me what is sold and what is what's stuck. That is a big
+ * thing."
+ *
+ * So a row is a PRODUCT THIS SHOP HAS DEALT IN, carrying three counted figures —
+ * bought, still here, sold — from `shopShelf`. The count in the header is still
+ * the shelf alone, because that is the number a sales order can draw and the two
+ * must never disagree; the rows say the rest.
  *
  * ## The tab is still down there, and still where the money is
  *
@@ -50,19 +56,17 @@ import { ShopBuysPanel } from './ShopBuysPanel'
 export function RoadshowBoard(): JSX.Element {
   const toast = useToast()
   const [tabs, setTabs] = useState<PurchaseOrder[] | null>(null)
-  const [stock, setStock] = useState<Record<string, StockAtLocationRow[]>>({})
+  const [stock, setStock] = useState<Record<string, ShopShelfRow[]>>({})
   const [adding, setAdding] = useState<string | null>(null)
   /** The tile somebody opened, and which shop it is on. Null the rest of the time. */
-  const [openTile, setOpenTile] = useState<{ shop: string; product: StockAtLocationRow } | null>(
-    null
-  )
+  const [openTile, setOpenTile] = useState<{ shop: string; product: ShopShelfRow } | null>(null)
 
   const load = useCallback(async () => {
     const [openTabs, ...shelves] = await Promise.all([
       api.purchaseOrders.openTabs(),
-      ...ROADSHOW_SHOPS.map((shop) => api.inventory.stockAtLocation(shop))
+      ...ROADSHOW_SHOPS.map((shop) => api.inventory.shopShelf(shop))
     ])
-    const next: Record<string, StockAtLocationRow[]> = {}
+    const next: Record<string, ShopShelfRow[]> = {}
     ROADSHOW_SHOPS.forEach((shop, i) => {
       next[shop] = shelves[i] ?? []
     })
@@ -73,6 +77,25 @@ export function RoadshowBoard(): JSX.Element {
   useEffect(() => {
     void load()
   }, [load])
+
+  /**
+   * IT REPAINTS WHEN THE FACTS MOVE, which every other board here already did.
+   *
+   * This one read once on mount and then only after its own Add — so a price
+   * filled in on the purchase order, a case sold at the counter, or anything a
+   * second laptop did left the columns showing what was true when the screen was
+   * opened. On a Saturday that is the whole point of the board: two people are
+   * buying and selling out of the same four shelves at once, and the one staring
+   * at this screen was the one with the stale numbers.
+   *
+   * BOTH families, because the card is two different facts. The columns are the
+   * SHELVES (inventory) and the footer is the TAB (purchasing), and watching one
+   * would leave the other half of every card stale — which reads as the two
+   * disagreeing rather than as one of them being old.
+   */
+  useLiveRefresh([...LIVE.purchasing, ...LIVE.inventory], () => {
+    void load()
+  })
 
   /**
    * The open tab for each shop, folded for case.
@@ -99,8 +122,31 @@ export function RoadshowBoard(): JSX.Element {
       <div className="rs-board">
         {ROADSHOW_SHOPS.map((shop) => {
           const rows = stock[shop] ?? []
-          const units = rows.reduce((n, r) => n + r.quantity, 0)
+          // THE HEADER COUNT IS THE SHELF, not the list length. A row for
+          // something wholly sold belongs on the list and contributes nothing to
+          // what can be picked, and this number has to keep agreeing with what a
+          // sales order can draw.
+          const units = rows.reduce((n, r) => n + r.here, 0)
           const tab = tabFor.get(shop.toLowerCase()) ?? null
+          // The shelf and the tab are two different facts, and this is the one
+          // place they are held together — so both sentences are derived here.
+          const standing = tab
+            ? {
+                poNumber: tab.poNumber,
+                orderedUnits: tab.orderedUnits,
+                receivedUnits: tab.receivedUnits,
+                pendingPriceCount: tab.pendingPriceCount ?? 0
+              }
+            : null
+          const headline = emptyShelfHeadline(standing)
+          // ONLY ABOUT STOCK STILL STANDING. A case that has already sold is
+          // money spent and a sale booked — the board cannot undo either, and
+          // Wholesale is where it is reported. What this can prevent is the next
+          // wrong sale. See unpricedTabWarning.
+          const warning = unpricedTabWarning(
+            standing,
+            rows.reduce((n, r) => n + r.unpricedHere, 0)
+          )
           return (
             <section className="rs-col" key={shop}>
               <header className="rs-col-head">
@@ -118,9 +164,14 @@ export function RoadshowBoard(): JSX.Element {
               </header>
 
               {rows.length === 0 ? (
-                <p className="rs-col-empty">
-                  Nothing here yet. Add what you buy and it lands on this shelf straight away.
-                </p>
+                /* WHY IT IS EMPTY, not merely THAT it is. A shop with a running
+                   tab has almost never had "nothing added" — a case bought and
+                   sold the same afternoon leaves the shelf at zero and the tab
+                   holding it for ever — and saying so invites somebody to add it
+                   twice. See emptyShelfHeadline. */
+                <div className="rs-col-empty">
+                  <p>{headline}</p>
+                </div>
               ) : (
                 <ul className="rs-list">
                   {rows.map((r) => (
@@ -132,17 +183,36 @@ export function RoadshowBoard(): JSX.Element {
                           could not reach. See ShopBuysPanel. */}
                       <button
                         type="button"
-                        className="rs-item"
+                        className={`rs-item${r.here <= 0 ? ' is-gone' : ''}`}
                         onClick={() => setOpenTile({ shop, product: r })}
-                        title={`When ${r.name} was bought at ${shop}`}
+                        title={`When ${r.name} was bought at ${shop}, and what became of it`}
                       >
                         <span className="rs-item-name">{r.name}</span>
-                        <span className="rs-item-qty mono">{r.quantity}</span>
+                        {/* WHAT IS LEFT, then what went. A row showing only "2"
+                            cannot tell four-bought-two-sold from two-bought, and
+                            those are different weeks. The sold half is muted
+                            because it is history and the other half is stock. */}
+                        <span className="rs-item-qty mono">
+                          {r.here > 0 && <b>{r.here}</b>}
+                          {r.sold > 0 && (
+                            <span className="rs-item-sold">
+                              {r.here > 0 ? ' · ' : ''}
+                              {r.sold} sold
+                            </span>
+                          )}
+                          {r.here <= 0 && r.sold <= 0 && <span className="rs-item-sold">gone</span>}
+                        </span>
                       </button>
                     </li>
                   ))}
                 </ul>
               )}
+
+              {/* AFTER the list and before the buttons, on every column that
+                  has one. Below the products because it is about them, and
+                  above the footer because filling the price in is the thing it
+                  is asking for. */}
+              {warning && <p className="rs-col-warn">{warning}</p>}
 
               <footer className="rs-col-foot">
                 <Button
@@ -179,6 +249,14 @@ export function RoadshowBoard(): JSX.Element {
           shop={openTile.shop}
           product={openTile.product}
           onClose={() => setOpenTile(null)}
+          onMoved={async (what) => {
+            toast.success(what)
+            await load()
+          }}
+          onRemoved={async (what) => {
+            toast.success(what)
+            await load()
+          }}
         />
       )}
 

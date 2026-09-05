@@ -20,7 +20,10 @@ import { LOCATION_IDS } from '@shared/inventory'
 import type { ProductAvailability, StockAtLocationRow } from '@shared/availability'
 import { isHomeShelf } from '@shared/availability'
 import { normalizeUpc } from '@shared/upc'
+import type { StockMoveRequest } from '@shared/stockMove'
+import { moveNote, moveRefusal } from '@shared/stockMove'
 import { getDb } from './database'
+import { pushCostToPurchaseOrders, type CostPushBack } from './poCostLink'
 import type { LotPick } from '@shared/costLots'
 import {
   QTY_EPS,
@@ -29,6 +32,7 @@ import {
   createLot,
   listOpenLots,
   recordTxnLots,
+  relocateLots,
   reverseLotReceipt,
   roundQty,
   slicesCost,
@@ -619,12 +623,34 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
   // The catalog is where somebody goes to put a price on a product, so it is
   // where doing so has to land.
   //
-  // It can only ever ADD basis, never reprice a purchase. It runs solely when
-  // the product's cost value is nil, and even then touches only layers carrying
-  // nothing — the same two guards `setZeroCostBasis` gives the banner's field,
-  // which remains the version that REPORTS what it did.
-  if (input.unitCost != null && next.unit_cost > 0 && productCostValue(getDb(), input.id) <= 0) {
-    rebaseZeroCostLayers(getDb(), input.id, unitMoney(next.unit_cost))
+  // IT CAN ONLY EVER ADD BASIS, NEVER REPRICE A PURCHASE — and that guarantee
+  // comes from the LAYER and LINE guards below, not from a product-level one.
+  //
+  // This used to also require `productCostValue(...) <= 0`: the product had to
+  // have no cost ANYWHERE before a catalog price would reach the stock. The
+  // owner found what that costs — "if I adjusted the price in inventory that
+  // price should be automatically fed into the POs ... it can be either or".
+  // Hold five cases of a product at $900 from an old order and take one more in
+  // at a roadshow with no price, and the product's cost value is well above
+  // zero, so typing the price in the catalog moved NOTHING: not the roadshow
+  // layer, not its purchase order. The one case that needed it was the one case
+  // it skipped.
+  //
+  // The gate is gone because it was never the thing keeping this safe.
+  // `rebaseZeroCostLayers` touches only layers carrying NOTHING, and
+  // `pushCostToPurchaseOrders` refuses any line that already states a price. A
+  // product holding both priced and unpriced stock is the ordinary case, not the
+  // dangerous one, and those two guards handle it exactly right: the blanks get
+  // filled and everything already stated is left alone.
+  if (input.unitCost != null && next.unit_cost > 0) {
+    // The SAME linkage the banner does. Wiring one door and not the other is
+    // exactly the shape of the bug being fixed here — a price entered on the
+    // product form is the same claim as one entered on the banner, and the
+    // purchase order behind the stock needs it either way.
+    const db = getDb()
+    const cost = unitMoney(next.unit_cost)
+    rebaseZeroCostLayers(db, input.id, cost)
+    pushCostToPurchaseOrders(db, input.id, nowIso())
   }
   return getProduct(input.id)
 }
@@ -638,8 +664,25 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
  * the dashboard banner's, because "a cost typed here reaches the stock" has to
  * be one behaviour rather than two that drift.
  */
-function rebaseZeroCostLayers(db: Database, productId: string, cost: number): number {
-  const run = db.transaction((): number => {
+function rebaseZeroCostLayers(
+  db: Database,
+  productId: string,
+  cost: number
+): { changed: number; lotIds: string[] } {
+  const run = db.transaction((): { changed: number; lotIds: string[] } => {
+    // THE IDS ARE READ FIRST, not just the count. A bulk UPDATE can say how many
+    // rows it moved and never which — and "which" is what the purchase orders
+    // behind them need. See pushCostToPurchaseOrders: a product can hold layers
+    // from several orders at several prices, and only the ones carrying nothing
+    // are this operation's business.
+    const lotIds = (
+      db
+        .prepare(
+          `SELECT id FROM inventory_lots
+            WHERE product_id = ? AND qty_remaining > 0 AND unit_cost <= 0`
+        )
+        .all(productId) as Array<{ id: string }>
+    ).map((r) => r.id)
     const info = db
       .prepare(
         `UPDATE inventory_lots SET unit_cost = ?
@@ -650,7 +693,7 @@ function rebaseZeroCostLayers(db: Database, productId: string, cost: number): nu
     // none it returns early and the figure already on the product row stands,
     // which is the number the valuation falls back to.
     syncProductAvgCost(db, productId)
-    return info.changes
+    return { changed: info.changes, lotIds }
   })
   return run()
 }
@@ -694,18 +737,39 @@ export function setZeroCostBasis(productId: string, unitCost: number): CostBasis
   // quantity again, the same precision a layer and a product average are stored
   // at everywhere else.
   const cost = unitMoney(Math.max(0, unitCost))
-  const run = db.transaction((): number => {
+  const run = db.transaction((): { changed: number; pushed: CostPushBack } => {
+    const ts = nowIso()
     db.prepare('UPDATE inventory_products SET unit_cost = ?, updated_at = ? WHERE id = ?').run(
       cost,
-      nowIso(),
+      ts,
       productId
     )
-    return rebaseZeroCostLayers(db, productId, cost)
+    const rebased = rebaseZeroCostLayers(db, productId, cost)
+    /**
+     * AND BACK TO THE PURCHASE ORDER THE STOCK CAME IN ON.
+     *
+     * The owner's words: "when I went and I placed the price of this item, it
+     * went through and it registered in the inventory correctly. But on the PO,
+     * it didn't update." PO-0458 read $0.00 a unit and $0.00 total for a case
+     * that cost real money, because this function stopped at the shelf.
+     *
+     * IN THE SAME TRANSACTION as the re-base, so the shelf and the document can
+     * never be left disagreeing by a failure halfway through — which is the
+     * state this whole fix exists to end. See pushCostToPurchaseOrders for the
+     * one thing it refuses to touch.
+     */
+    const pushed = pushCostToPurchaseOrders(db, productId, ts)
+    return { changed: rebased.changed, pushed }
   })
-  const layersRevalued = run()
+  const result = run()
   const product = getProduct(productId)
   if (!product) return null
-  return { product, layersRevalued, costValue: productCostValue(db, productId) }
+  return {
+    product,
+    layersRevalued: result.changed,
+    costValue: productCostValue(db, productId),
+    ordersPriced: result.pushed
+  }
 }
 
 /** Update only a product's high bid (market value) + when it was set. */
@@ -1387,6 +1451,30 @@ export function inventoryStats(): InventoryStats {
   // box is market value the Spread is leaving out, while an uncosted case is
   // market value the Spread is still counting as profit. One list, two
   // sentences. Ordered by how much money each is carrying either way.
+  //
+  // EXCEPT STOCK THAT IS ONLY ON A ROADSHOW SHELF. The owner: "if something is
+  // from the roadshow and doesn't have the price it does not need to have
+  // anything weird in there ... it can just be shown as 0 ... it is fine".
+  //
+  // That is right, and it is a statement about what this list IS. A roadshow
+  // week buys and sells against itself for days before anybody knows what a case
+  // cost; carrying it at zero in the meantime is the ordinary state of a shop
+  // that is still running, not a number somebody forgot. This list is a work
+  // queue — the fix is "put the real cost on the product" — and a queue that is
+  // permanently full of rows nobody should act on is a queue that stops being
+  // read, taking the genuinely wrong ones down with it.
+  //
+  // ONLY THE LIST. `outsideSpreadValue` and the Spread tile are untouched,
+  // because `totalValue − totalCost = spread + outsideSpreadValue` is an exact
+  // identity across three tiles and filtering one side of it would make them
+  // stop reconciling — the very failure that field exists to prevent. So the
+  // tile goes on counting this money and the banner stops naming it; see the
+  // note on `outsideSpreadValue` in @shared/types, which says so.
+  //
+  // The LIKE duplicates `isRoadshowLocation` in @shared/inventory, which is the
+  // source of truth and matches the same way (case-insensitive, anywhere in the
+  // name). It is restated here for the same reason the RM/AM test is restated in
+  // po_unit_destinations: SQL cannot call it.
   const zeroCost = (
     db
       .prepare(
@@ -1394,6 +1482,11 @@ export function inventoryStats(): InventoryStats {
            FROM (${PRODUCT_TOTALS}) t
            JOIN inventory_products p ON p.id = t.id
           WHERE t.qty > 0 AND t.cost_value <= 0
+            AND EXISTS (
+              SELECT 1 FROM inventory_stock st
+               WHERE st.product_id = t.id AND st.quantity > 0
+                 AND st.location NOT LIKE '%roadshow%'
+            )
           ORDER BY market_value DESC`
       )
       .all() as Array<{
@@ -1512,4 +1605,79 @@ export function salesSeries(days: number): SalesPoint[] {
 function dayKey(d: Date): string {
   const p = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/**
+ * DRIVE STOCK FROM ONE SHELF TO ANOTHER, cost and all.
+ *
+ * The owner: "sometimes I want to be able to take things that I buy from
+ * roadshow and move them out of roadshow inventory and then move it to be with
+ * us." Somebody has put four cases in a car in Kentucky and unloaded them at RM,
+ * and until now the app had no way to be told.
+ *
+ * ## Neither of the two things it looks like
+ *
+ * NOT A RE-ROUTE. `setPurchaseOrderRouting` refuses once units are checked in,
+ * and a roadshow line is checked in the instant it is typed — see
+ * takeTabDelivery. That refusal is correct: routing says where units WILL go,
+ * and these have already been.
+ *
+ * NOT TWO ADJUSTMENTS. Down at the shop consumes its layer; up at home opens a
+ * fresh one at the destination's own basis. That is how a $400 case becomes a
+ * $150 one, permanently. See relocateLots, which moves the layer instead.
+ *
+ * ## The money must not move, and the ledger says so out loud
+ *
+ * Two rows, equal and opposite, both `adjustment`, both carrying the same
+ * COST BASIS with the same sign as their quantity. Nothing is earned or spent by
+ * carrying a box to a different room, so the pair sums to zero units and zero
+ * dollars — which is the property the P&L depends on and the reason this is not
+ * written as a sale at one end and a purchase at the other.
+ *
+ * Two rows rather than one because the stock ledger is read PER SHELF: a single
+ * row would leave one of the two shelves with no record of the day its count
+ * changed, and "where did those four go" is exactly the question somebody asks
+ * it.
+ */
+export function moveStock(req: StockMoveRequest, actorId: string | null): StockResult {
+  const db = getDb()
+  const productId = String(req?.productId ?? '').trim()
+  const from = String(req?.from ?? '').trim()
+  const to = String(req?.to ?? '').trim()
+
+  const run = db.transaction((): StockResult => {
+    const exists = db.prepare('SELECT id FROM inventory_products WHERE id = ?').get(productId)
+    if (!exists) return { product: null, error: 'Product not found.' }
+
+    const qty = roundQty(req?.quantity ?? 0, allowsFractionalQty(db, productId))
+    // Validated against what the shelf HOLDS, read here rather than taken from
+    // the caller: a screen's count is as old as its last refresh, and this is
+    // the one check standing between a typo and a negative shelf.
+    const refusal = moveRefusal({ ...req, productId, from, to, quantity: qty }, stockQty(productId, from))
+    if (refusal) return { product: getProduct(productId), error: refusal }
+
+    const moved = relocateLots(db, productId, from, to, qty)
+    bumpStock(productId, from, -qty)
+    bumpStock(productId, to, qty)
+
+    // What these units are carried at — the layers' own figure, not the
+    // product's average. It is the same number on both rows because it is the
+    // same boxes, which is the whole claim this operation is making.
+    const basis = slicesCost(moved)
+    const note = moveNote(from, to, req?.note ?? null)
+    insertTxn(productId, 'adjustment', -qty, null, null, note, actorId, from, -basis)
+    insertTxn(productId, 'adjustment', qty, null, null, note, actorId, to, basis)
+
+    // The average is across every shelf, so moving between two of them cannot
+    // change it — called anyway, because "cannot change" is an invariant this
+    // function should be keeping rather than relying on.
+    syncProductAvgCost(db, productId)
+    return { product: getProduct(productId) }
+  })
+
+  try {
+    return run()
+  } catch (err) {
+    return { product: getProduct(productId), error: (err as Error).message }
+  }
 }

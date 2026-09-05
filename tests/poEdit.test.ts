@@ -447,5 +447,184 @@ ok(
   'while three is accepted, which is what the minus lands on'
 )
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. what it cost to ship it, corrected after the fact ===')
+// ---------------------------------------------------------------------------
+/**
+ * "The edit feature on a purchase order should be product AND shipping."
+ *
+ * Product was already done — sections 1 to 7 above are that feature. Shipping
+ * was half-built and it is worth being exact about which half, because the
+ * missing piece was invisible from the repository:
+ *
+ *   · `updatePurchaseOrderHeader` has accepted a `shippingCost` since v0.0.218
+ *     and restates the total and the COGS row correctly. Section 8a below is
+ *     the same assertion orderExtras already made, and it always passed.
+ *   · The IPC HANDLER built its patch by copying two named fields across and
+ *     dropped the third on the floor. So the only door into that code from the
+ *     app was shut, and nothing noticed, because every test called the
+ *     repository directly.
+ *
+ * That is why the assertions below go through the registered channel rather
+ * than the function: a test that imports the repository cannot see a transport
+ * that never forwards the field, and this feature was unreachable for two
+ * versions behind a repository test that passed.
+ */
+const registry = require('../src/main/ipcRegistry')
+const { runAs } = require('../src/main/services/session')
+const { insertEmployee } = require('../src/main/db/employees')
+
+// The registration seam the Electron binding uses, standing in for Electron.
+// Past registrations are replayed into it, so import order does not matter.
+const channels = new Map<string, any>()
+registry.setRegistrationSink((channel: string, handler: any) => channels.set(channel, handler))
+require('../src/main/purchaseOrdersIpc').registerPurchaseOrdersIpc()
+
+// A real account, because the handler is gated on module.invoicing and a test
+// that bypassed the gate would not be exercising the handler the app calls.
+// Invented name.
+const OWNER = insertEmployee(
+  {
+    firstName: 'Marla',
+    lastName: 'Quint',
+    companyId: 'RM-EDIT-1',
+    title: 'Owner',
+    email: 'marla.quint@example.invalid',
+    role: 'owner'
+  },
+  null,
+  null,
+  false
+).employee.id
+
+/** Call a channel the way the app does — same handler, same payload shape. */
+const viaIpc = (channel: string, payload: any): any =>
+  runAs({ userId: OWNER, origin: 'test' }, () => channels.get(channel)({ sender: null }, payload))
+
+const shipOrder = po.createPurchaseOrder(
+  {
+    supplier: 'Fenwick Freight',
+    location: 'RM',
+    lines: [{ productId: 'p_a', quantity: 4, unitPrice: 25 }],
+    shippingCost: 30
+  },
+  ACTOR
+)
+
+// -- 8a. freight is in the total and in the ledger from the start -----------
+ok(shipOrder.total === 130, 'an order with freight totals lines + freight — 4 × 25 + 30', String(shipOrder.total))
+ok(cogsFor(shipOrder.id) === 130, 'and the COGS row carries the same figure', String(cogsFor(shipOrder.id)))
+ok(po.getPurchaseOrder(shipOrder.id).shippingCost === 30, 'with the freight itself readable')
+
+// -- 8b. THE BUG: the channel has to forward the field ----------------------
+const bumped = viaIpc('po:set-header', { id: shipOrder.id, shippingCost: 45 })
+ok(bumped?.ok === true, 'the channel accepts a freight correction', String(bumped?.error))
+ok(
+  po.getPurchaseOrder(shipOrder.id).shippingCost === 45,
+  'AND IT ACTUALLY LANDS — the handler used to build its patch from two named ' +
+    'fields and drop this one, so the app could not reach the code that works',
+  String(po.getPurchaseOrder(shipOrder.id).shippingCost)
+)
+ok(po.getPurchaseOrder(shipOrder.id).total === 145, 'the total follows it — 100 + 45', String(po.getPurchaseOrder(shipOrder.id).total))
+ok(cogsFor(shipOrder.id) === 145, 'and so does the ledger row', String(cogsFor(shipOrder.id)))
+ok(
+  bumped.data.total === 145,
+  'and the figure comes back on the same call, so the receipt repaints without a re-read',
+  String(bumped.data?.total)
+)
+
+// -- 8c. the supplier still works, so the patch was widened and not swapped --
+const freightRenamed = viaIpc('po:set-header', { id: shipOrder.id, supplier: 'Fenwick Cards' })
+ok(freightRenamed?.ok === true, 'the supplier is still editable over the same channel')
+ok(po.getPurchaseOrder(shipOrder.id).supplier === 'Fenwick Cards', 'and still lands')
+ok(
+  po.getPurchaseOrder(shipOrder.id).shippingCost === 45,
+  'WITHOUT DISTURBING THE FREIGHT — an omitted field means "leave it alone", ' +
+    'so renaming a supplier must not quietly wipe a cost',
+  String(po.getPurchaseOrder(shipOrder.id).shippingCost)
+)
+
+// -- 8d. empty is "nobody said", which is not zero --------------------------
+const cleared = viaIpc('po:set-header', { id: shipOrder.id, shippingCost: null })
+ok(cleared?.ok === true, 'freight can be cleared back off an order')
+ok(
+  po.getPurchaseOrder(shipOrder.id).shippingCost === null,
+  'to NULL and not to 0 — "nobody typed one" is a different fact from "it was free"',
+  String(po.getPurchaseOrder(shipOrder.id).shippingCost)
+)
+ok(po.getPurchaseOrder(shipOrder.id).total === 100, 'and it comes back out of the total', String(po.getPurchaseOrder(shipOrder.id).total))
+ok(cogsFor(shipOrder.id) === 100, 'and out of the ledger with it', String(cogsFor(shipOrder.id)))
+
+// -- 8e. freight moves AFTER receipt, while the line price is frozen --------
+/**
+ * The asymmetry is the point, and it is not an oversight in either direction.
+ *
+ * A line price freezes on receipt because receiving stamps it into a FIFO cost
+ * lot: moving the line afterwards would leave the order claiming one cost and
+ * the stock on the shelf carrying another. Freight never enters a lot at all —
+ * receivePoLine costs every lot at the LINE's unit price — so there is no lot
+ * to disagree with, and the carrier's invoice routinely arrives days after the
+ * boxes do. Freezing it on receipt would lock the field at exactly the moment
+ * the real number turns up.
+ */
+const shipLanded = po.createPurchaseOrder(
+  {
+    supplier: 'Fenwick Freight',
+    location: 'RM',
+    lines: [{ productId: 'p_b', quantity: 2, unitPrice: 50 }],
+    shippingCost: 20
+  },
+  ACTOR
+)
+po.receivePurchaseOrderLines(shipLanded.id, [{ lineId: shipLanded.lines[0].id, quantity: 2 }], 'emp_owner')
+const landedFresh = po.getPurchaseOrder(shipLanded.id)
+ok(landedFresh.status === 'received', 'an order that has fully landed', landedFresh.status)
+
+const lotCostBefore = db
+  .prepare(
+    `SELECT unit_cost AS c FROM inventory_lots
+      WHERE id IN (SELECT lot_id FROM po_line_receipts WHERE po_id = ?)`
+  )
+  .get(shipLanded.id) as { c: number } | undefined
+
+ok(
+  !!po.updatePurchaseOrderLine(shipLanded.id, landedFresh.lines[0].id, { unitPrice: 60 }).error,
+  'refuses a new LINE PRICE, because a cost lot already carries the old one'
+)
+
+const lateInvoice = viaIpc('po:set-header', { id: shipLanded.id, shippingCost: 35 })
+ok(
+  lateInvoice?.ok === true,
+  'BUT ACCEPTS A NEW FREIGHT FIGURE — the carrier bills after it delivers, and ' +
+    'the field has to still be open when that invoice arrives',
+  String(lateInvoice?.error)
+)
+ok(po.getPurchaseOrder(shipLanded.id).total === 135, 'the total restates — 2 × 50 + 35', String(po.getPurchaseOrder(shipLanded.id).total))
+ok(cogsFor(shipLanded.id) === 135, 'and the ledger with it', String(cogsFor(shipLanded.id)))
+
+const lotCostAfter = db
+  .prepare(
+    `SELECT unit_cost AS c FROM inventory_lots
+      WHERE id IN (SELECT lot_id FROM po_line_receipts WHERE po_id = ?)`
+  )
+  .get(shipLanded.id) as { c: number } | undefined
+ok(
+  lotCostAfter?.c === lotCostBefore?.c && lotCostBefore?.c === 50,
+  'AND THE COST LOT IS UNTOUCHED at the line price — which is the whole reason ' +
+    'this edit is safe where a price edit is not',
+  `${lotCostBefore?.c} → ${lotCostAfter?.c}`
+)
+
+// -- 8f. rubbish does not become a number -----------------------------------
+viaIpc('po:set-header', { id: shipLanded.id, shippingCost: -10 })
+ok(
+  po.getPurchaseOrder(shipLanded.id).shippingCost === null,
+  'a negative freight is refused rather than stored, so no order carries a credit ' +
+    'in the box that means a charge',
+  String(po.getPurchaseOrder(shipLanded.id).shippingCost)
+)
+ok(po.getPurchaseOrder(shipLanded.id).total === 100, 'and the total is the lines alone', String(po.getPurchaseOrder(shipLanded.id).total))
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

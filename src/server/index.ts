@@ -1,9 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import { statSync } from 'node:fs'
+import { createWriteStream, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { BYTES_TAG, IPC } from '@shared/ipc'
 import { effectivePermissions, type Permission } from '@shared/permissions'
 import { getDb } from '../main/db/database'
+import { applyPendingRestore } from '../main/services/restoreOnBoot'
+import { resetSyncAfterRestore } from '../main/db/sync'
 import { configureBusinessTimeZone } from '../main/util'
 import { getEmployeeById } from '../main/db/employees'
 import { runAs } from '../main/services/session'
@@ -23,6 +25,7 @@ import { registerOwnerIpc } from '../main/ownerIpc'
 import { registerScheduleIpc } from '../main/scheduleIpc'
 import { registerInvoicesIpc } from '../main/invoicesIpc'
 import { registerOrderExtrasIpc } from '../main/orderExtrasIpc'
+import { registerBackupIpc, registerRestoreIpc, uploadedRestorePath } from '../main/backupIpc'
 import { registerMessagesIpc } from '../main/messagesIpc'
 import { registerPerformanceIpc } from '../main/performanceIpc'
 import { initCloudSync, stopCloudSync } from '../main/services/cloudSync'
@@ -97,6 +100,16 @@ const DEFAULT_HOST = process.env.RMOPS_HOST ?? '0.0.0.0'
  * having no limit is one request holding the whole heap.
  */
 const MAX_BODY_BYTES = Number(process.env.RMOPS_MAX_BODY_MB ?? 48) * 1024 * 1024
+
+/**
+ * A restore is exempt from the JSON body cap, and needs its own.
+ *
+ * Deliberately generous: this is a whole database, the limit exists to stop a
+ * runaway upload filling a 10 GB Render disk rather than to police size, and a
+ * restore refused for being too big is somebody locked out of their own
+ * business data. See the /api/restore route.
+ */
+const MAX_RESTORE_BYTES = Number(process.env.RMOPS_MAX_RESTORE_MB ?? 2048) * 1024 * 1024
 
 const SESSION_COOKIE = 'rmops_session'
 
@@ -622,6 +635,78 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return
   }
 
+  /**
+   * A DATABASE ARRIVING, streamed straight to disk.
+   *
+   * Every other call in this app is JSON through `readBody`, which buffers the
+   * whole body in memory and caps at RMOPS_MAX_BODY_MB. A backup does not fit
+   * that shape twice over: base64 in JSON inflates a file by a third, and the
+   * cap would start refusing restores at roughly 35 MB — a ceiling the database
+   * crosses on its own as shipping labels and packing slips accumulate, which
+   * is to say it would break precisely when the business is old enough to have
+   * something worth restoring.
+   *
+   * So the bytes are piped to a file as they arrive, and nothing holds the
+   * whole thing. The route writes to ONE path it chooses itself; the client
+   * never names a location. Validation is not done here — this only receives —
+   * and the file is inert until `restore:stage` is called and says otherwise.
+   */
+  if (req.method === 'POST' && path === '/api/restore') {
+    if (!session) {
+      send(req, res, 401, { ok: false, error: 'Sign in first.' })
+      return
+    }
+    // The same rule as every other backup channel, checked before a single byte
+    // is written. See backupIpc.ts for why it is the role and not a permission.
+    if (getEmployeeById(session.employeeId)?.role !== 'owner') {
+      send(req, res, 403, { ok: false, error: 'Only the owner can restore a backup.' })
+      return
+    }
+
+    const dest = uploadedRestorePath()
+    const declared = String(req.headers['x-rmops-filename'] ?? 'backup.db')
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const out = createWriteStream(dest)
+        let size = 0
+        req.on('data', (chunk: Buffer) => {
+          size += chunk.length
+          if (size > MAX_RESTORE_BYTES) {
+            out.destroy()
+            reject(new Error('That backup is larger than this server will accept.'))
+          }
+        })
+        req.on('error', reject)
+        out.on('error', reject)
+        out.on('finish', () => resolve())
+        req.pipe(out)
+      })
+      // The browser's name for the file, kept beside it rather than passed
+      // through the channel — see uploadedRestoreName().
+      writeFileSync(`${dest}.name`, declared.split(/[\\/]/).pop() ?? 'backup.db', 'utf8')
+    } catch (err) {
+      try {
+        unlinkSync(dest)
+      } catch {
+        /* nothing arrived, or it is already gone */
+      }
+      send(req, res, 413, {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      return
+    }
+
+    // Hand off to the ordinary handler, as the caller, so the owner check and
+    // every refusal live in exactly one place.
+    const staged = await runAs(
+      { userId: session.employeeId, origin: 'http', stationId: readStationId(req) },
+      () => invokeHandler(IPC.restoreStage, [{ fromUpload: true }])
+    )
+    send(req, res, 200, staged)
+    return
+  }
+
   // The one route that matters: run an operation as the caller.
   if (callChannel !== null) {
     await handleCall(req, res, callChannel, session?.employeeId ?? null)
@@ -923,6 +1008,8 @@ export function startServer(options: ServerOptions = {}): Server {
   registerScheduleIpc()
   registerInvoicesIpc()
   registerOrderExtrasIpc()
+  registerBackupIpc()
+  registerRestoreIpc()
   registerMessagesIpc()
   registerPerformanceIpc()
 
@@ -946,7 +1033,33 @@ export function startServer(options: ServerOptions = {}): Server {
       : '[pdf] no Chromium found — documents will be served as HTML for the browser to print'
   )
 
+  /**
+   * BEFORE getDb(). See the note in restoreOnBoot.ts — this is the only moment
+   * nothing holds the database open, and a swap performed at any other time
+   * leaves this process serving the file it already opened.
+   *
+   * On Render this is what makes restore self-service: the confirm handler ends
+   * the process, the health check notices, the platform starts a new one, and
+   * the swap happens here. Nobody has to find a Restart button.
+   */
+  const restored = applyPendingRestore()
+  if (restored) {
+    console.log(
+      restored.ok
+        ? `[restore] ${restored.filename} is now the database.` +
+            (restored.replacedPath ? ` The previous one is kept at ${restored.replacedPath}.` : '')
+        : `[restore] FAILED — ${restored.error}`
+    )
+  }
+
   const db = getDb()
+  // Forget this machine's sync history so the restored rows are never pushed at
+  // the relay as new work — a month-old backup would otherwise beat everybody's
+  // current data on last-write-wins. See resetSyncAfterRestore.
+  if (restored?.ok) {
+    const { cleared } = resetSyncAfterRestore()
+    console.log(`[restore] sync reset — ${cleared} queued change(s) dropped, cursor back to 0.`)
+  }
   // Many readers, one writer, and readers never block the writer. This is the
   // pragma that makes a shared SQLite file work for a team.
   db.pragma('journal_mode = WAL')

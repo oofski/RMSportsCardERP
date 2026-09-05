@@ -23,6 +23,7 @@ import {
   passesOrderFilters,
   type OrderFilterId
 } from '@shared/orderStatus'
+import { paidAction, quickBooksAction } from '@shared/orderActions'
 import { DimsModal } from './DimsModal'
 import { QuickConfirm } from './QuickConfirm'
 import { api } from '../../lib/api'
@@ -82,6 +83,7 @@ export function InvoicesBoard({
     sent: 0,
     paid: 0,
     outstanding: 0,
+    owedCount: 0,
     paidTotal: 0,
     thisMonth: 0
   })
@@ -408,6 +410,16 @@ export function InvoicesBoard({
       <div className="po-page-head">
         <h2>Invoices</h2>
         <div className="po-page-stats">
+          {/* OPEN, first and in the same place as the buy side.
+              The purchase board has always led with a count and this led with
+              money, so the two halves of the same question — who still owes
+              us, who do we still owe — could not be read the same way. Counted
+              off the same predicate as the figure beside it, so the pair can
+              never describe different sets of orders. */}
+          <div className="po-page-stat">
+            <span className="po-page-stat-val">{stats.owedCount}</span>
+            <span className="po-page-stat-label">Open</span>
+          </div>
           <div className="po-page-stat">
             <span className="po-page-stat-val mono">
               {formatMoney(stats.outstanding, { compact: true })}
@@ -646,12 +658,6 @@ export function InvoicesBoard({
                       }}
                       onDelete={() => setDeleting(inv)}
                       onPdf={() => void api.invoices.openPdf(inv.id)}
-                      onAttachPo={() => setAttaching(inv)}
-                      onRoute={async () => {
-                        const full = await api.invoices.get(inv.id)
-                        if (full) setRouting(full)
-                        else toast.error('That order is gone.')
-                      }}
                       onEditPrices={async () => {
                         const full = await api.invoices.get(inv.id)
                         if (full) setPricing(full)
@@ -731,7 +737,29 @@ export function InvoicesBoard({
       )}
 
       {pricing && (
-        <EditOrderModal invoice={pricing} onClose={() => setPricing(null)} onDone={load} />
+        <EditOrderModal
+          invoice={pricing}
+          onClose={() => setPricing(null)}
+          onDone={load}
+          /* The three that left the card. Each hand-off closes Edit first, so
+             only one of these screens is ever open — see EditOrderModal's
+             header on why they are hand-offs and not sections. */
+          onRoute={() => setRouting(pricing)}
+          onAttachPo={() => setAttaching(pricing)}
+          onBookStock={async () => {
+            const res = await api.invoices.rebookStock(pricing.id)
+            if (!res.ok) {
+              toast.error(res.error || 'The stock could not be booked.')
+              return
+            }
+            // BOOKED and STILL-NOTHING are both successes and must read
+            // differently: "no stock on the shelf" is a different problem from
+            // "done", and a green tick on it would be a lie.
+            if ((res.data?.units ?? 0) > 0) toast.success(res.data!.message)
+            else toast.error(res.data?.message ?? 'Nothing was booked.')
+            await load()
+          }}
+        />
       )}
 
       {paying && (
@@ -791,6 +819,82 @@ export function InvoicesBoard({
  * because that is who is owed, and this leads with the BUYER because that is who
  * owes.
  */
+/**
+ * The face of the one QuickBooks button, per act.
+ *
+ * `none` gets the same info glyph as a disabled state elsewhere rather than a
+ * warning one: an order that never went to QuickBooks is a fact about how it was
+ * settled, not a problem to fix.
+ */
+const QBO_ICON: Record<ReturnType<typeof quickBooksAction>['id'], string> = {
+  push: 'ArrowUpRight',
+  'push-again': 'RefreshCw',
+  retry: 'RefreshCw',
+  check: 'RefreshCw',
+  'record-payment': 'DollarSign',
+  open: 'ExternalLink',
+  none: 'Info'
+}
+
+/** The confirmations this card can raise. See the ASKS table below. */
+type AskId = 'items' | 'send' | 'unpaid' | 'push-again' | 'qbo-payment'
+
+/**
+ * WHAT EACH CONFIRMATION SAYS.
+ *
+ * Keyed rather than nested, so a new one is a new entry instead of a sixth arm
+ * on five separate ternaries. Every one of them names the ORDER — a dialog that
+ * only asks "are you sure?" is answered yes by reflex.
+ *
+ * Two of these are new, and both guard a press that reaches somebody's real
+ * books: sending an invoice that a crashed attempt may already have posted, and
+ * banking a payment in QuickBooks. Neither can be undone from this app.
+ */
+const ASKS: Record<
+  AskId,
+  (
+    label: string,
+    qbo: ReturnType<typeof quickBooksAction>,
+    pay: ReturnType<typeof paidAction>
+  ) => { title: string; detail: string; confirmLabel: string; confirmIcon: string; tone?: 'danger' | 'primary' }
+> = {
+  items: (label) => ({
+    title: 'Goods are in hand?',
+    detail: `${label} moves on to be weighed and measured.`,
+    confirmLabel: 'Yes, they are here',
+    confirmIcon: 'Check',
+    tone: 'primary'
+  }),
+  send: (label) => ({
+    title: 'Send it anyway?',
+    detail: `${label} moves straight to ready to ship, ahead of the usual gates.`,
+    confirmLabel: 'Move it',
+    confirmIcon: 'ArrowRight',
+    tone: 'primary'
+  }),
+  unpaid: (label, _qbo, pay) => ({
+    title: 'Withdraw the payment?',
+    detail: `${label} goes back to unpaid. ${pay.title}`,
+    confirmLabel: 'Mark not paid',
+    confirmIcon: 'RotateCcw',
+    tone: 'danger'
+  }),
+  'push-again': (label, qbo) => ({
+    title: 'Send it again?',
+    detail: `${label} ${qbo.title}`,
+    confirmLabel: 'Send it',
+    confirmIcon: 'RefreshCw',
+    tone: 'danger'
+  }),
+  'qbo-payment': (_label, qbo) => ({
+    title: 'Record this payment in QuickBooks?',
+    detail: qbo.title,
+    confirmLabel: 'Record it',
+    confirmIcon: 'DollarSign',
+    tone: 'primary'
+  })
+}
+
 function InvoiceCard({
   invoice,
   busy,
@@ -801,8 +905,6 @@ function InvoiceCard({
   onRetryPush,
   onDelete,
   onPdf,
-  onAttachPo,
-  onRoute,
   onEditPrices,
   onPayUpFront,
   onItemsInHand,
@@ -820,13 +922,12 @@ function InvoiceCard({
   onRetryPush: () => Promise<void>
   onDelete: () => void
   onPdf: () => void
-  /** Attach the purchase order that supplied this sale. See AttachPurchaseOrderModal. */
-  onAttachPo: () => void
-  /** Change where the lines are fulfilled from. See RouteLinesModal. */
-  onRoute: () => void
-  /** Edit the lines of a sale that has already posted. See EditOrderModal. */
+  /**
+   * Open the Edit screen. It is the door to routing, the attached purchases and
+   * re-taking the shelf as well — see EditOrderModal.
+   */
   onEditPrices: () => void
-  /** Open the paid-up-front dialog for this order. */
+  /** Open the record-a-payment dialog. See paidAction in @shared/orderActions. */
   onPayUpFront: () => void
   /** Confirm the goods arrived — the only signal a dropship has. */
   onItemsInHand: () => Promise<void>
@@ -839,7 +940,10 @@ function InvoiceCard({
 }): JSX.Element {
   const toast = useToast()
   const [measuring, setMeasuring] = useState(false)
-  const [asking, setAsking] = useState<'items' | 'send' | 'paid' | 'unpaid' | null>(null)
+  const [asking, setAsking] = useState<AskId | null>(null)
+  /** A payment is being recorded in QuickBooks. Locks the button so a slow
+   *  relay cannot be pressed twice into two payments. */
+  const [payingQbo, setPayingQbo] = useState(false)
   // What to call this order in a sentence. The number if it has one; a draft
   // may not, and "Invoice null moves on" is worse than the vaguer phrase.
   const label = invoice.invoiceNumber ? `Sales order ${invoice.invoiceNumber}` : 'This order'
@@ -880,7 +984,59 @@ function InvoiceCard({
    * simply older than the change, which is what the banner used to conflate.
    */
   const qboState = qboTotalState(invoice)
+  /**
+   * THE TWO BUTTONS THE OWNER ASKED FOR, decided in one place each.
+   *
+   * "have a quickbooks button just one that tells me the status and moves it
+   * into quickbooks if needed, mark it as paid, like dont need 2 buttons there".
+   *
+   * Nine buttons on this card; five of them were QuickBooks and two were money.
+   * The reason there were five and two is that each was gated separately, months
+   * apart, and separately-written gates overlap — which is how "Mark paid" and
+   * "Paid up front…" came to sit side by side both claiming the same word for
+   * the second time in this file's history.
+   *
+   * These two calls return exactly ONE action each, so that arrangement is no
+   * longer expressible. Every word on the faces and in the tooltips comes from
+   * @shared/orderActions, which is tested against every field combination the
+   * two can be in; nothing below decides anything.
+   */
+  const qbo = quickBooksAction(invoice, { money: formatMoney, day: formatDay })
+  const pay = paidAction(invoice)
   const [checkingQbo, setCheckingQbo] = useState(false)
+  /**
+   * Bank the payment in QuickBooks.
+   *
+   * Moved off its own button and onto the shared one, but nothing else about it
+   * changed: it stays a SEPARATE PRESS from ticking paid, because an action that
+   * moves money has to be the thing somebody pressed rather than something that
+   * happened while they pressed something else, and it is still the only
+   * arrangement where a failure reaches the person who caused it instead of a
+   * log. It now asks first — the merge put it one press from acts that are
+   * harmless, and this one is not.
+   *
+   * The amount is deliberately absent from the button: the backend takes a FRESH
+   * reading and pays what QuickBooks says is outstanding at that moment, which
+   * is not necessarily what this screen is displaying. See @shared/quickbooksPayment.
+   */
+  const recordQboPayment = async (): Promise<void> => {
+    setPayingQbo(true)
+    try {
+      const res = await api.invoices.recordQboPayment(invoice.id)
+      if (!res.ok) {
+        toast.error(res.error || 'QuickBooks would not take the payment.')
+        return
+      }
+      // POSTED and DID-NOT-NEED-POSTING are both successes and read differently
+      // on purpose: "nothing was owing" is not a thing that went wrong, and a
+      // red box for it teaches people to dismiss the red box that matters.
+      toast.success(res.data?.message ?? 'Nothing needed recording.')
+      await onReload()
+    } finally {
+      setPayingQbo(false)
+    }
+  }
+
   /**
    * Ask QuickBooks about THIS ONE invoice, now.
    *
@@ -1015,9 +1171,38 @@ function InvoiceCard({
       style={{ cursor: 'pointer' }}
     >
       <div className="po-card-top">
-        <span className="po-card-num mono">
-          {invoice.qboDocNumber || invoice.invoiceNumber || 'Draft'}
-        </span>
+        {/* THE NUMBER IS THE DOOR TO QUICKBOOKS, and that is what buys the
+            footer its ninth button back.
+
+            Merging four QuickBooks buttons into one costs something real: the
+            single button says the ONE act the order needs, so in the states
+            where that act is "check" or "record the payment", plain "open it
+            over there" has nowhere to go. It is the press with no precondition —
+            an invoice in QuickBooks can always be looked at — so it belongs on
+            the thing that already NAMES the QuickBooks document rather than in a
+            queue behind acts that do.
+
+            The precedent is FreightLine, whose tracking chip has been a link
+            that stops propagation since it was written; the same two lines are
+            what keep this from also opening the order. */}
+        {invoice.qboId ? (
+          <button
+            type="button"
+            className="po-card-num mono po-card-num-link"
+            title={`Open ${invoice.qboDocNumber ? `invoice ${invoice.qboDocNumber}` : 'this invoice'} in QuickBooks`}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              void api.invoices.openInQbo(invoice.id)
+            }}
+          >
+            {invoice.qboDocNumber || invoice.invoiceNumber || 'Draft'}
+          </button>
+        ) : (
+          <span className="po-card-num mono">
+            {invoice.qboDocNumber || invoice.invoiceNumber || 'Draft'}
+          </span>
+        )}
         {/* NAMED, not just tinted. A purchase order can say it in the number —
             displayOrderNumber turns PO-0042 into Drop-0042 — and an invoice
             number cannot, because it is the string QuickBooks receives. So the
@@ -1167,22 +1352,16 @@ function InvoiceCard({
               ? `QuickBooks is ${formatMoney(Math.abs(qboState.gap))} ${qboState.gap > 0 ? 'lower' : 'higher'}`
               : 'QuickBooks not checked since you edited'}
           </span>
-          {/* THE WHOLE POINT OF THE BANNER IS THAT IT CAN BE ANSWERED.
+          {/* THE BANNER NO LONGER CARRIES ITS OWN BUTTON.
 
-              `qbo_total_amt` is what the sweep last READ, not what QuickBooks
-              says now — so correcting the invoice over there left this accusing
-              a difference that had already been settled, with nothing on the
-              card to do about it. This asks Intuit about THIS ONE invoice and
-              the banner corrects itself, which is the difference between a
-              warning and a nag. */}
-          <button
-            type="button"
-            className="po-card-qbogap-check"
-            disabled={checkingQbo}
-            onClick={() => void onCheckQbo()}
-          >
-            {checkingQbo ? 'Checking…' : 'Check now'}
-          </button>
+              It had one — "Check now" — because a banner accusing a difference
+              with nothing to press about it is a nag rather than a warning. That
+              is still true, and the answer is still one press away: in exactly
+              the two states that draw this banner, the QuickBooks button below
+              reads "Check QuickBooks". Keeping both would have left two
+              QuickBooks controls on one card in precisely the states the owner
+              was complaining about. The affordance moved four inches; it did not
+              go. */}
         </div>
       )}
       {/* Drawn only once QuickBooks has said something — see PaymentBar, which
@@ -1205,50 +1384,23 @@ function InvoiceCard({
 
       {asking && (
         <div onClick={(e) => e.stopPropagation()}>
+          {/* ONE TABLE, NOT A LADDER OF TERNARIES. This was five nested
+              conditionals repeated across five props, so adding a sixth confirm
+              meant editing five expressions and getting all five right. The
+              merge needed two more, which is the point at which the shape had to
+              change. */}
           <QuickConfirm
-            title={
-              asking === 'items'
-                ? 'Goods are in hand?'
-                : asking === 'send'
-                  ? 'Send it anyway?'
-                  : asking === 'paid'
-                    ? 'Mark it paid?'
-                    : 'Withdraw the payment?'
-            }
-            detail={
-              asking === 'items'
-                ? `${label} moves on to be weighed and measured.`
-                : asking === 'send'
-                  ? `${label} moves straight to ready to ship, ahead of the usual gates.`
-                  : asking === 'paid'
-                    ? `${label} is recorded as settled, dated today.`
-                    : `${label} goes back to unpaid. Nothing is refunded — this only changes what the board says.`
-            }
-            confirmLabel={
-              asking === 'items'
-                ? 'Yes, they are here'
-                : asking === 'send'
-                  ? 'Move it'
-                  : asking === 'paid'
-                    ? 'Mark paid'
-                    : 'Mark not paid'
-            }
-            confirmIcon={
-              asking === 'items'
-                ? 'Check'
-                : asking === 'send'
-                  ? 'ArrowRight'
-                  : asking === 'paid'
-                    ? 'DollarSign'
-                    : 'RotateCcw'
-            }
-            tone={asking === 'unpaid' ? 'danger' : 'primary'}
+            {...ASKS[asking](label, qbo, pay)}
             onConfirm={
               asking === 'items'
                 ? onItemsInHand
                 : asking === 'send'
                   ? onSendAnyway
-                  : () => onSetPaid(asking === 'paid')
+                  : asking === 'unpaid'
+                    ? () => onSetPaid(false)
+                    : asking === 'push-again'
+                      ? onRetryPush
+                      : recordQboPayment
             }
             onClose={() => setAsking(null)}
           />
@@ -1276,23 +1428,34 @@ function InvoiceCard({
             
             Drawn only while the order is WAITING. A card that is ready, or one
             payment has not cleared, has nothing here to press. */}
-        {/* MARK IT PAID, IN THE COLUMN NAMED FOR IT.
-            
-            Only on Payment cards: the column is the settling-up step, and a tick
-            anywhere earlier would be recording money against an order nobody has
-            finished. QuickBooks wins where it speaks — an order Intuit says is
-            paid shows as paid and is not un-tickable here, because the books are
-            the record for money and this board is not. */}
-        {invoice.status === 'paid' && !invoice.qboPaidAt && (
+        {/* ONE MONEY BUTTON. See paidAction in @shared/orderActions.
+
+            There were two, and they were the second pair on this card to share a
+            word: "Mark paid" stamped a date and nothing else, in the Payment
+            column only, while "Paid up front…" beside it recorded the amount,
+            the method, the reference, moved the card AND released the order to
+            be picked. Which of the two somebody got depended on which column the
+            card happened to be standing in.
+
+            Now one button, and the order's own terms decide what it says: an
+            up-front buyer is being HELD by this press, an on-delivery buyer is
+            not, and either way the money is recorded properly rather than only
+            when somebody found the right one of the two.
+
+            IT REACHES FURTHER THAN EITHER DID. Recording is offered on any
+            unsettled order in any column, and withdrawing on any order paid
+            here — where before the pair between them left an order paid in the
+            Ready to ship column with no way to say so. */}
+        {pay.id !== 'none' && (
           <button
             type="button"
-            className={`btn po-move ${paid ? 'inv-move-paid' : ''}`}
+            className="btn po-move inv-move-paid"
             disabled={busy}
-            title={paid ? 'Withdraw the payment on this order' : 'Record that the money arrived'}
-            onClick={() => setAsking(paid ? 'unpaid' : 'paid')}
+            title={pay.title}
+            onClick={() => (pay.id === 'withdraw' ? setAsking('unpaid') : onPayUpFront())}
           >
-            <Icon name={paid ? 'RotateCcw' : 'DollarSign'} size={14} />
-            {paid ? 'Mark not paid' : 'Mark paid'}
+            <Icon name={pay.id === 'withdraw' ? 'RotateCcw' : 'DollarSign'} size={14} />
+            {pay.label}
           </button>
         )}
         {fxTone && (
@@ -1319,61 +1482,55 @@ function InvoiceCard({
             </button>
           </>
         )}
-        {/* SAVED HERE, NOT IN QUICKBOOKS. The push runs on save and can fail —
-            no network, an expired grant, an item QuickBooks will not accept —
-            and the invoice is deliberately kept when it does, because throwing
-            away a document somebody just typed is worse than one that has not
-            reached the books yet. This is the way back. Without it the failure
-            toast pointed at a button that did not exist. */}
-        {invoice.qboPushState === 'failed' && (
-          <button
-            type="button"
-            className="btn po-move inv-move-retry"
-            disabled={busy}
-            title={invoice.qboPushError ?? 'QuickBooks refused this invoice.'}
-            onClick={() => void onRetryPush()}
-          >
-            <Icon name="RefreshCw" size={14} />
-            Retry QuickBooks
-          </button>
-        )}
-        {invoice.status === 'draft' && (
-          <button
-            type="button"
-            className="btn po-move"
-            disabled={busy}
-            onClick={() => onMove('created')}
-          >
-            To QuickBooks
-          </button>
-        )}
+        {/* ONE QUICKBOOKS BUTTON. See quickBooksAction in @shared/orderActions.
 
-        {/* SEND IS NOT ON THE CARD. It emails the invoice to the BUYER, which
-            is a different act from putting it on the books — but read as "send
-            it to QuickBooks" beside an invoice already in QuickBooks, which
-            made it look like an unfinished step on a finished document. The
-            owner does not email from here; QuickBooks does the sending, and
-            Open in QuickBooks is one click away with Send, print and payment
-            all on that screen. Emailing a buyer now happens in QuickBooks,
-            which is also where a record of having sent it lives. */}
+            There were five: To QuickBooks, Retry QuickBooks, Record payment in
+            QuickBooks, Open in QuickBooks, and Check now up on the gap banner.
+            Each was gated on a different field and none of them said where the
+            order actually stood — the owner asked for "a quickbooks button just
+            one that tells me the status and moves it into quickbooks if needed",
+            which is exactly the two halves those five were missing between them.
 
-        {/* PAID UP FRONT is a different act from moving the card, and it is the
-            one that happens on this floor: a case sold off a stream is paid by
-            Zelle before anybody picks a box. It records the money, says how it
-            arrived, and RELEASES THE ORDER TO BE PICKED — which "Mark paid"
-            never did, because Paid is the last column and an order that lands
-            there looks finished. */}
-        {!settled && (
-          <button
-            type="button"
-            className="btn po-move inv-move-upfront"
-            disabled={busy}
-            title="Record money that arrived before it shipped, and put it on the packing list"
-            onClick={onPayUpFront}
-          >
-            Paid up front…
-          </button>
-        )}
+            THE STATUS IS IN THE TOOLTIP AND THE ACT IS ON THE FACE. "In
+            QuickBooks as invoice 1043, $6,900.00 owing." is a sentence a label
+            cannot hold, and the label has to name what pressing does or the
+            button is a badge. So both, and the helper writes both together so
+            they can never describe different states.
+
+            Plain "open it over there" is the press this merge would otherwise
+            bury, because it is never the most useful act. It moved to the
+            invoice number at the top of the card — see po-card-num-link, which
+            is also a shorter reach than the bottom of a footer.
+
+            SEND IS STILL NOT ON THE CARD, for the reason it never was: it emails
+            the BUYER, which is a different act from putting the invoice on the
+            books, and it read as "send it to QuickBooks" beside an invoice
+            already there. QuickBooks does the sending, on the screen the number
+            above opens. */}
+        <button
+          type="button"
+          className={`btn po-move${qbo.warn ? ' inv-move-retry' : ''}`}
+          disabled={busy || qbo.id === 'none' || checkingQbo || payingQbo}
+          title={qbo.title}
+          onClick={() => {
+            if (qbo.confirm) {
+              setAsking(qbo.id === 'push-again' ? 'push-again' : 'qbo-payment')
+              return
+            }
+            if (qbo.id === 'push') return onMove('created')
+            if (qbo.id === 'retry') return void onRetryPush()
+            if (qbo.id === 'check') return void onCheckQbo()
+            if (qbo.id === 'open') return void api.invoices.openInQbo(invoice.id)
+          }}
+        >
+          <Icon name={QBO_ICON[qbo.id]} size={14} />
+          {qbo.id === 'check' && checkingQbo
+            ? 'Checking…'
+            : qbo.id === 'record-payment' && payingQbo
+              ? 'Recording…'
+              : qbo.label}
+        </button>
+
 
         {/* MOVING THE CARD, AND SAYING SO.
 
@@ -1384,8 +1541,8 @@ function InvoiceCard({
             name, doing different things, on the same card.
 
             The column is called Payment, so this is called what it does. The
-            money is recorded by the two buttons that record money: the tick in
-            that column, and Paid up front… beside this one. */}
+            money is recorded by the one button that records money, which is
+            Mark paid… above — this only moves the card. */}
         {!settled && invoice.status !== 'paid' && canMoveInvoice(invoice.status, 'paid') && (
           <button
             type="button"
@@ -1414,60 +1571,6 @@ function InvoiceCard({
           </button>
         )}
 
-        {/* THE PURCHASE THAT SUPPLIED THIS SALE, attachable at any time.
-            
-            Not gated on status, and that is the point. A sale only ever got its
-            purchase order in the seconds after one of them was created — sell
-            first and the app offered to write the purchase, buy first and it
-            offered to write the sale — so an invoice already sent to a buyer,
-            with the purchase raised separately by hand, had no way to say the
-            two were one deal. Attaching writes the link and nothing else: no
-            line, no total, nothing in QuickBooks.
-            
-            ALWAYS OFFERED NOW, and it used to be hidden the moment the sale had
-            one — "a second purchase order is a different claim". That was true
-            of the storage, which had one column, and never true of the trade:
-            ten cases to one buyer sourced from three purchases is an ordinary
-            week here. `sale_purchase_links` is the many-to-many that replaced
-            the column, so the button opens a screen that both adds and removes
-            and it has to be reachable whatever is already attached. */}
-        {invoice.status !== 'void' && (
-          <button
-            type="button"
-            className="btn po-move"
-            title="Which purchase orders supplied this sale"
-            onClick={onAttachPo}
-          >
-            <Icon name="Link" size={14} />
-            {invoice.sourcePoCount === 0
-              ? 'Attach purchase order'
-              : invoice.sourcePoCount === 1
-                ? 'Purchase order · 1'
-                : `Purchase orders · ${invoice.sourcePoCount}`}
-          </button>
-        )}
-
-        {/* WHERE THE GOODS COME FROM, editable for the life of the order.
-            
-            Not part of the invoice form, and not gated the way the form is. The
-            form edits the DOCUMENT — prices, the total, what a buyer was billed
-            — and is refused the moment an invoice reaches QuickBooks, correctly.
-            Which shelf a line draws down, or whether a supplier ships it direct,
-            is a fact about THIS business's inventory that is discovered
-            afterwards more often than not, and nothing on the buyer's invoice
-            says it. See RouteLinesModal. */}
-        {invoice.status !== 'void' && (
-          <button
-            type="button"
-            className="btn po-move"
-            title="Change which lines come off a shelf and which ship direct from a supplier"
-            onClick={onRoute}
-          >
-            <Icon name="Route" size={14} />
-            Fulfilled from
-          </button>
-        )}
-
         {/* EDIT THE LINES, on an order already on the books.
 
             The invoice form is refused once a document posts, and rightly: it
@@ -1486,28 +1589,24 @@ function InvoiceCard({
             CALLED "EDIT" AND NOT "EDIT PRICES", because it stopped being only
             about prices the moment quantity came with it, and a button that
             undersells what it does is one people do not press when they need
-            it. On a DRAFT it is absent — the ordinary form does all of this and
-            the buyer and the dates besides, and two ways to edit the same thing
-            is how they come to disagree. See EditOrderModal. */}
-        {invoice.status !== 'void' && invoice.status !== 'draft' && (
+            it.
+
+            AND IT IS NOW THE SCREEN THE OWNER ASKED FOR: "I just really need a
+            way to edit to sales order at any point, add in dimensions ... the
+            edit button should let me do a lot to the sales order too". So it
+            opens on a draft as well — the gate that hid it there was this line,
+            not a rule in the backend — and it carries the box measurements plus
+            the doors to routing, the attached purchases and re-taking the shelf,
+            which were three more buttons on this card until now. */}
+        {invoice.status !== 'void' && (
           <button
             type="button"
             className="btn po-move"
-            title="Change quantities and prices on your copy. QuickBooks has to be changed separately."
+            title="Change quantities, prices and the box measurements on your copy. QuickBooks has to be changed separately."
             onClick={onEditPrices}
           >
             <Icon name="Pencil" size={14} />
             Edit
-          </button>
-        )}
-
-        {invoice.qboId && (
-          <button
-            type="button"
-            className="btn po-move"
-            onClick={() => void api.invoices.openInQbo(invoice.id)}
-          >
-            Open in QuickBooks
           </button>
         )}
 

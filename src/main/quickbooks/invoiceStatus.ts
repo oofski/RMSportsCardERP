@@ -113,6 +113,7 @@ function toObservation(
   return {
     qboId: String(raw.Id),
     docNumber: raw.DocNumber ?? null,
+    customerId: raw.CustomerRef?.value ? String(raw.CustomerRef.value) : null,
     emailStatus: raw.EmailStatus ?? null,
     deliveredAt: raw.DeliveryInfo?.DeliveryTime ?? null,
     // Explicitly null, never 0, when the field is absent. "QuickBooks says

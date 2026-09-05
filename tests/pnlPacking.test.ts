@@ -165,27 +165,35 @@ ok(PACKAGING_LINES.every((k) => pnlDrillSource(k) === null),
 // POSTAGE IS BACK ON, and this is the half that diverges from the packaging.
 // It was taken off for a release and returned; the four buckets never stopped
 // being computed, which is why returning it was a section and nothing else.
-const shipSection = sectionOf(day, 'shipping')
-ok(!!shipSection, 'THE STATEMENT PRINTS A SHIPPING SECTION',
+//
+// IT IS NOW UNDER "FEES & COSTS" rather than a section of its own. Whatnot's
+// month-end summary prints seller paid shipping and shipping surcharges under
+// its own Fees and costs total, so this app groups them the same way and the
+// two can finally be read side by side. The four lines and their drills are
+// unchanged; only which section holds them moved.
+const shipSection = sectionOf(day, 'fees')
+ok(!!shipSection, 'THE STATEMENT STILL PRINTS THE POSTAGE LINES',
    JSON.stringify(buildPnl(day).map((s: any) => s.key)))
 ok(
   SHIPPING_LINES.every((k) => shipSection.lines.some((l: any) => l.key === k)),
-  'carrying all four postage lines',
+  'carrying all four postage lines, under Fees & costs',
   JSON.stringify(shipSection?.lines.map((l: any) => l.key))
 )
 ok(
-  cents(shipSection.subtotal) === cents(day.netShipping),
-  'and subtotalling to net shipping',
-  `${shipSection?.subtotal} vs ${day.netShipping}`
+  sectionOf(day, 'shipping') === null,
+  'and there is no Shipping section left behind for them to be counted in twice',
+  JSON.stringify(buildPnl(day).map((s: any) => s.key))
 )
 // FOUR LINES, NOT ONE NET FIGURE. The subsidy runs the other way from the three
 // costs, and netting them would leave a reader unable to tell a cheap month from
 // a well-subsidised one.
 ok(
   cents(
-    shipSection.lines.reduce((n: number, l: any) => n + l.amount, 0)
+    shipSection.lines
+      .filter((l: any) => SHIPPING_LINES.includes(l.key))
+      .reduce((n: number, l: any) => n + l.amount, 0)
   ) === cents(day.netShipping),
-  'the four lines are themselves the subtotal'
+  'and the four of them still come to net shipping'
 )
 // EVERY ONE OF THEM DRILLS. They are ledger money — Whatnot wrote each row — so
 // each maps to its own bucket and nothing is derived on the way.
@@ -736,11 +744,18 @@ ok(cents(d7.netAfterCosts) ===
 
 // THE POSTAGE REACHES THE STATEMENT AND THE PACKAGING STILL DOES NOT. The two
 // were taken off together and only one came back, so this is where they part.
-const s7 = sectionOf(d7, 'shipping')
-ok(!!s7, 'the night prints a shipping section',
+const s7 = sectionOf(d7, 'fees')
+ok(!!s7, 'the night prints its postage, under Fees & costs',
    JSON.stringify(buildPnl(d7).map((s: any) => s.key)))
-ok(cents(s7.subtotal) === cents(-0.9), 'subtotalling to the 90¢ of net postage',
-   String(s7?.subtotal))
+// The four still come to 90c of net postage. They are read out of the section
+// rather than off its subtotal now, because that subtotal is every charge
+// Whatnot levied — which is the point of the regrouping.
+const shipCents = (): number =>
+  s7.lines
+    .filter((l: any) => SHIPPING_LINES.includes(l.key))
+    .reduce((n: number, l: any) => n + cents(l.amount), 0)
+ok(shipCents() === cents(-0.9), 'the postage lines coming to the 90¢ of net postage',
+   String(shipCents() / 100))
 ok(
   SHIPPING_LINES.every((k) => s7.lines.some((l: any) => l.key === k)),
   'with a line for each of the four buckets',
@@ -812,10 +827,16 @@ for (const [label, row] of [
      JSON.stringify(buildPnl(row).map((s: any) => s.key)))
   // The postage rolls up like every other section: a rollup that dropped it
   // would pass on the days and fail here.
-  const rolled = sectionOf(row, 'shipping')
-  ok(!!rolled && cents(rolled.subtotal) === cents(row.netShipping),
-     `${label}: the shipping section rolls up to the period's net postage`,
-     `${rolled?.subtotal} vs ${row.netShipping}`)
+  const rolled = sectionOf(row, 'fees')
+  const rolledShipping =
+    rolled === null
+      ? null
+      : rolled.lines
+          .filter((l: any) => SHIPPING_LINES.includes(l.key))
+          .reduce((n: number, l: any) => n + cents(l.amount), 0)
+  ok(rolledShipping !== null && rolledShipping === cents(row.netShipping),
+     `${label}: the postage lines roll up to the period's net postage`,
+     `${rolledShipping} vs ${cents(row.netShipping)}`)
 }
 ok(cents(v7b.totals.netShipping) !== 0,
    'and the postage is on the statement rather than waiting to be reinstated',

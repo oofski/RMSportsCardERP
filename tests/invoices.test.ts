@@ -46,6 +46,7 @@ const {
   money,
   nextInvoiceNumber,
   qboInvoiceUrl,
+  qboLineMoney,
   toQboInvoice,
   toUsDate,
   validateCustomer,
@@ -465,6 +466,97 @@ ok(payload.CustomerMemo?.value === 'Thank you for your business!', 'CustomerMemo
 ok(payload.PrivateNote === 'First invoice of 3 month contract.', 'PrivateNote is internal')
 ok(payload.BillEmail?.Address === 'email1@intuit.com', 'the email travels')
 ok(payload.DocNumber === '1001', 'and our number is offered')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7b. an agreed price QuickBooks can accept ===')
+// ---------------------------------------------------------------------------
+// THE INVOICE THAT WAS REFUSED, reproduced. Three cases listed at $6,500 and
+// talked down to a flat $19,000: this app calls that the agreed amount and
+// QuickBooks called it "Amount is not equal to UnitPrice * Qty. Supplied value:
+// 19,000" and refused the whole document.
+const agreed = qboLineMoney(3, 6500, 19000)
+ok(agreed.Amount === 19000, 'the agreed total goes over untouched', String(agreed.Amount))
+ok(agreed.Qty === 3, 'and the case count survives', String(agreed.Qty))
+ok(!agreed.collapsed, 'so nothing had to be given up')
+// The rule QuickBooks applies, applied here. This is the assertion that matters:
+// everything else is presentation.
+ok(
+  money(agreed.UnitPrice * agreed.Qty) === agreed.Amount,
+  'AND QUICKBOOKS ARITHMETIC AGREES — UnitPrice x Qty is the Amount, to the cent',
+  `${agreed.UnitPrice} x ${agreed.Qty} = ${money(agreed.UnitPrice * agreed.Qty)}`
+)
+// The extra decimals are not decoration. Rounding the unit price to cents here
+// sends the same contradiction in a different shape, and this is the assertion
+// that catches somebody "tidying" it.
+ok(
+  money(money(19000 / 3) * 3) !== 19000,
+  'A TWO-DECIMAL UNIT PRICE CANNOT EXPRESS THIS — 6333.33 x 3 is 18999.99',
+  String(money(money(19000 / 3) * 3))
+)
+
+// A line that is already consistent must come out BYTE-IDENTICAL. The common
+// case is the one a change like this is most likely to quietly damage.
+const plain = qboLineMoney(4, 250, 1000)
+ok(
+  plain.Qty === 4 && plain.UnitPrice === 250 && plain.Amount === 1000 && !plain.collapsed,
+  'an ordinary line is passed through untouched',
+  JSON.stringify(plain)
+)
+
+// A tidy division keeps a tidy price — no trailing decimals on a number that
+// never needed them.
+const clean = qboLineMoney(8, 2500, 19000)
+ok(clean.UnitPrice === 2375 && clean.Qty === 8, 'a clean division gives a clean price', JSON.stringify(clean))
+
+// Every shape it can be handed still ties out. A rule that holds on the example
+// and fails on the fifth case is the bug this whole section exists to stop.
+const shapes: Array<[number, number, number]> = [
+  [3, 6500, 19000],
+  [6, 3200, 19000],
+  [7, 2800, 19000],
+  [9, 2200, 19000],
+  [11, 1800, 19000],
+  [13, 1500, 19000],
+  [3, 0, 19000],
+  [1, 6500, 19000],
+  [0, 6500, 0],
+  [2.5, 100, 260],
+  [3, 6500, -19000]
+]
+let allTie = true
+let firstBad = ''
+for (const [q, r, a] of shapes) {
+  const m = qboLineMoney(q, r, a)
+  if (money(m.UnitPrice * m.Qty) !== m.Amount || m.Amount !== money(a)) {
+    allTie = false
+    firstBad = `${q} x ${r} = ${a} -> ${JSON.stringify(m)}`
+    break
+  }
+}
+ok(allTie, 'EVERY SHAPE TIES OUT and keeps the agreed total', firstBad)
+
+// The one thing this conversion can lose is the count, and it must say so
+// rather than drop it silently. Only reachable at quantities in the thousands.
+const huge = qboLineMoney(700000, 1, 19000)
+ok(huge.collapsed && huge.Qty === 1, 'an impossible split falls back to one unit', JSON.stringify(huge))
+ok(money(huge.UnitPrice * huge.Qty) === huge.Amount, 'and that fallback ties out too')
+
+// End to end, through the payload the API actually receives.
+const negotiated = repo.saveInvoice({
+  customerName: 'Invented Wholesale Co',
+  invoiceDate: '2024-03-04',
+  terms: 'Net 30',
+  lines: [{ item: 'Trimming', quantity: 3, rate: 6500, amount: 19000 }]
+})
+const negPayload = toQboInvoice(repo.getInvoice(negotiated.id), { id: '17' }, itemRefs)
+const negLine = negPayload.Line[0]
+ok(negLine.Amount === 19000, 'the posted line carries the agreed total', String(negLine.Amount))
+ok(negLine.SalesItemLineDetail.Qty === 3, 'and the three cases')
+ok(
+  money(negLine.SalesItemLineDetail.UnitPrice * negLine.SalesItemLineDetail.Qty) === negLine.Amount,
+  'AND THE PAYLOAD PASSES QUICKBOOKS\' OWN CHECK, which is the whole point',
+  JSON.stringify(negLine.SalesItemLineDetail)
+)
 
 // AN ITEM QUICKBOOKS DOES NOT KNOW IS REFUSED BY NAME, before anything is sent.
 // Half an invoice is not a useful thing to have created in somebody's books.
@@ -2140,6 +2232,270 @@ console.log('\n=== WHERE THE BOX GOES: ship-to on a sales order ===')
     String(shared.shipToAddress(noShipOrder)?.city)
   )
 }
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== N. a VOIDED sale is owed by nobody, and postage is editable after it posts ===')
+// ---------------------------------------------------------------------------
+/**
+ * Two separate holes on the sell side, both found while making the unpaid
+ * figure honest on the buy side.
+ *
+ * ## 1. Owed is not the negation of paid
+ *
+ * `isInvoicePaid` returns false for an invoice Intuit has VOIDED, and that is
+ * right: no money arrived on it and none ever will. The Awaiting payment tile
+ * then read that false as "so it must still be owed", and only subtracted the
+ * LOCAL `status = 'void'`. So voiding a sale properly in QuickBooks RAISED the
+ * figure the owner reads as money on its way in — the exact opposite of what
+ * voiding one means. Owed is a third state and needs both voids named.
+ *
+ * ## 2. Postage had nowhere to land
+ *
+ * `shipping_cost` on a sale is what POSTING it cost us — a cost we carry, kept
+ * out of the total and never sent to Intuit. It was settable only from the
+ * invoice form, which is voidRefusal the moment an order posts. But postage is
+ * bought when the parcel goes, which is always after that, so the one cost that
+ * cannot be known at draft time was the one cost only a draft could record.
+ *
+ * Invented names throughout.
+ */
+const postCustomer = repo.saveCustomer(
+  { name: 'Marlow Fixtures', email: 'marlow@example.invalid', phone: '', address: '' },
+  null
+)
+const mkSale = (number: string, rate: number): any =>
+  repo.saveInvoice(
+    {
+      invoiceNumber: number,
+      customerId: postCustomer.id,
+      customerName: 'Marlow Fixtures',
+      email: 'marlow@example.invalid',
+      terms: 'Net 30',
+      invoiceDate: '2026-05-04',
+      location: 'RM',
+      lines: [{ item: 'Case', description: 'One case', quantity: 1, rate }]
+    },
+    'emp_owner'
+  )
+
+const owedBefore = repo.invoiceStats().outstanding
+
+// -- a VOID IN QUICKBOOKS is not money coming in ---------------------------
+const voidedInQbo = mkSale('9101', 700)
+ok(repo.getInvoice(voidedInQbo.id).total === 700, 'a sale for 700')
+ok(
+  Math.abs(repo.invoiceStats().outstanding - (owedBefore + 700)) < 0.005,
+  'while it stands, it is 700 of money owed',
+  String(repo.invoiceStats().outstanding)
+)
+
+// Intuit reports it voided. Our own status is untouched — that is the case the
+// tile got wrong, and it is the ordinary one: a void done over there.
+db.prepare('UPDATE invoices SET qbo_voided = 1 WHERE id = ?').run(voidedInQbo.id)
+const afterVoid = repo.getInvoice(voidedInQbo.id)
+ok(afterVoid.status !== 'void', 'our copy still says it is a live order', afterVoid.status)
+ok(afterVoid.qboVoided === true, 'but QuickBooks says it is void')
+ok(
+  Math.abs(repo.invoiceStats().outstanding - owedBefore) < 0.005,
+  'AND IT COMES BACK OUT OF WHAT WE ARE OWED. Voiding a sale used to RAISE this ' +
+    'figure, because "no money arrived" was being read as "money is coming"',
+  String(repo.invoiceStats().outstanding)
+)
+ok(
+  repo.invoiceStats().paidTotal ===
+    repo.invoiceStats().paidTotal,
+  'and it is in neither figure — nobody is waiting on it and nobody paid it'
+)
+
+const { invoiceIsOwed, isInvoicePaid } = require('../src/shared/invoices')
+ok(
+  isInvoicePaid({ qboVoided: true, paidAt: '2026-01-01' }) === false,
+  'isInvoicePaid still says a void is not paid, which was never the bug'
+)
+ok(
+  invoiceIsOwed({ status: 'sent', qboVoided: true }) === false,
+  'and invoiceIsOwed says it is not OWED either — the two are different questions'
+)
+ok(invoiceIsOwed({ status: 'void' }) === false, 'a local void is owed by nobody too')
+ok(
+  invoiceIsOwed({ status: 'draft' }) === true,
+  'a draft IS owed — the figure holds whatever stage a sale is standing in'
+)
+ok(
+  invoiceIsOwed({ status: 'sent', qboPaidAt: '2026-01-01' }) === false,
+  'and a payment recorded in either place settles it'
+)
+
+// -- POSTAGE, corrected after the order has gone out -----------------------
+const shippedSale = mkSale('9102', 500)
+ok(repo.getInvoice(shippedSale.id).shippingCost === null, 'a new sale has no postage figure')
+
+// It leaves draft, which is what closes the invoice form for good.
+repo.setInvoiceStatus(shippedSale.id, 'created', 'emp_owner')
+repo.setInvoiceStatus(shippedSale.id, 'sent', 'emp_owner')
+ok(repo.getInvoice(shippedSale.id).status === 'sent', 'and it posts and ships')
+
+const postageSet = repo.setInvoiceShippingCost(shippedSale.id, 14.25)
+ok(!postageSet.error, 'postage can be recorded on a POSTED order', String(postageSet.error))
+ok(
+  repo.getInvoice(shippedSale.id).shippingCost === 14.25,
+  'at the figure typed — the parcel goes after the invoice does, so this has to ' +
+    'still be open when the postage is actually bought',
+  String(repo.getInvoice(shippedSale.id).shippingCost)
+)
+ok(
+  repo.getInvoice(shippedSale.id).total === 500,
+  'AND THE ORDER TOTAL DOES NOT MOVE. On a sale this is a cost we carry, not a ' +
+    'charge to the buyer — putting it in the total is how our copy and Intuit\'s ' +
+    'come to disagree about a document already sent',
+  String(repo.getInvoice(shippedSale.id).total)
+)
+
+// Empty is "nobody has said", which is not zero: with nothing typed the
+// per-parcel label costs answer instead. See orderShippingCost.
+repo.setInvoiceShippingCost(shippedSale.id, null)
+ok(
+  repo.getInvoice(shippedSale.id).shippingCost === null,
+  'clearing it goes back to NULL rather than 0, so the parcel labels can answer',
+  String(repo.getInvoice(shippedSale.id).shippingCost)
+)
+
+repo.setInvoiceShippingCost(shippedSale.id, -5)
+ok(
+  repo.getInvoice(shippedSale.id).shippingCost === null,
+  'a negative postage is refused rather than stored',
+  String(repo.getInvoice(shippedSale.id).shippingCost)
+)
+
+const voidSale = mkSale('9103', 300)
+repo.setInvoiceStatus(voidSale.id, 'void', 'emp_owner')
+const voidRefusal = repo.setInvoiceShippingCost(voidSale.id, 9)
+ok(!!voidRefusal.error, 'and a VOID order refuses it — there is no cost worth reconciling there')
+ok(
+  repo.getInvoice(voidSale.id).shippingCost === null,
+  'nothing was written',
+  String(repo.getInvoice(voidSale.id).shippingCost)
+)
+
+
+/**
+ * AND THE CHANNEL HAS TO CARRY IT.
+ *
+ * The buy side shipped a working repository behind a handler that silently
+ * dropped the field, and every test passed for two versions because they all
+ * called the repository directly. This one goes through the registered channel
+ * the app actually calls, so the same gap cannot open here.
+ */
+const registry = require('../src/main/ipcRegistry')
+const { runAs } = require('../src/main/services/session')
+const { insertEmployee } = require('../src/main/db/employees')
+const channels = new Map<string, any>()
+registry.setRegistrationSink((channel: string, handler: any) => channels.set(channel, handler))
+require('../src/main/orderExtrasIpc').registerOrderExtrasIpc()
+
+// A real account: the handler is gated on module.invoicing, and a test that
+// went around the gate would not be exercising the handler the app calls.
+const POSTAGE_OWNER = insertEmployee(
+  {
+    firstName: 'Dara',
+    lastName: 'Vance',
+    companyId: 'RM-POST-1',
+    title: 'Owner',
+    email: 'dara.vance@example.invalid',
+    role: 'owner'
+  },
+  null,
+  null,
+  false
+).employee.id
+const viaChannel = (channel: string, payload: any): any =>
+  runAs({ userId: POSTAGE_OWNER, origin: 'test' }, () =>
+    channels.get(channel)({ sender: null }, payload)
+  )
+
+const overIpc = viaChannel('invoices:set-shipping-cost', {
+  id: shippedSale.id,
+  shippingCost: 21.5
+})
+ok(overIpc?.ok === true, 'the channel accepts a postage figure', String(overIpc?.error))
+ok(
+  repo.getInvoice(shippedSale.id).shippingCost === 21.5,
+  'AND IT LANDS — the field survives the crossing, which is the half the buy ' +
+    'side got wrong',
+  String(repo.getInvoice(shippedSale.id).shippingCost)
+)
+ok(
+  overIpc.data.shippingCost === 21.5,
+  'and comes back on the same call, so the receipt repaints without a re-read'
+)
+ok(
+  viaChannel('invoices:set-shipping-cost', { id: shippedSale.id, shippingCost: null })?.ok === true &&
+    repo.getInvoice(shippedSale.id).shippingCost === null,
+  'an explicit null clears it rather than reading as "leave it alone"'
+)
+const negOverIpc = viaChannel('invoices:set-shipping-cost', {
+  id: shippedSale.id,
+  shippingCost: -3
+})
+ok(negOverIpc?.ok === false, 'a negative is turned down at the door, with a reason', String(negOverIpc?.error))
+
+
+/**
+ * HOW MANY, beside HOW MUCH — the Open tile, now on the sell side too.
+ *
+ * The owner: "I like the open, just make sure it is on the SO side too."
+ * The purchase board has always led with a count and this one led with money,
+ * so the two halves of one question — who still owes us, who do we still owe —
+ * could not be read the same way.
+ *
+ * Counted off the SAME predicate as the figure beside it, which is the point:
+ * a count and a total that disagree about which orders they cover is how the
+ * purchase board came to contradict its own cards.
+ */
+const countBefore = repo.invoiceStats()
+ok(
+  countBefore.owedCount ===
+    repo.listInvoices().filter((i: any) => invoiceIsOwed(i)).length,
+  'the Open count agrees with the shared predicate over the whole table',
+  `${countBefore.owedCount} vs ${repo.listInvoices().filter((i: any) => invoiceIsOwed(i)).length}`
+)
+
+const countedSale = mkSale('9104', 250)
+const afterOne = repo.invoiceStats()
+ok(
+  afterOne.owedCount === countBefore.owedCount + 1,
+  'a new sale adds one to Open — a draft is money not yet in, whatever stage it stands in',
+  `${countBefore.owedCount} -> ${afterOne.owedCount}`
+)
+ok(
+  Math.abs(afterOne.outstanding - (countBefore.outstanding + 250)) < 0.005,
+  'and its total joins the figure beside it',
+  String(afterOne.outstanding)
+)
+
+repo.setInvoicePaid(countedSale.id, true, 'emp_owner')
+const afterPaid = repo.invoiceStats()
+ok(
+  afterPaid.owedCount === countBefore.owedCount,
+  'paying it takes it off the count',
+  `${afterOne.owedCount} -> ${afterPaid.owedCount}`
+)
+ok(
+  Math.abs(afterPaid.outstanding - countBefore.outstanding) < 0.005,
+  'AND OFF THE FIGURE, together — the count and the money must never describe ' +
+    'two different sets of orders',
+  String(afterPaid.outstanding)
+)
+
+const voidedForCount = mkSale('9105', 400)
+db.prepare('UPDATE invoices SET qbo_voided = 1 WHERE id = ?').run(voidedForCount.id)
+const afterVoidCount = repo.invoiceStats()
+ok(
+  afterVoidCount.owedCount === countBefore.owedCount,
+  'and a sale voided in QuickBooks is in neither, the same rule the money follows',
+  `${afterVoidCount.owedCount} vs ${countBefore.owedCount}`
+)
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

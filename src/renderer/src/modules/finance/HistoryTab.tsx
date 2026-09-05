@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { Invoice } from '@shared/invoices'
 import type {
   HistorySource,
   OrderHistoryLine,
@@ -11,6 +12,8 @@ import { Money } from './bits'
 import { finance } from './api'
 import { DealTicketsTab } from './DealTicketsTab'
 import { DeletedTab } from './DeletedTab'
+import { AttachPurchaseOrderModal } from '../invoices/AttachPurchaseOrderModal'
+import { api } from '../../lib/api'
 
 /**
  * Finance → History: the year's ledger of orders, both sides.
@@ -114,13 +117,39 @@ export function HistoryTab(): JSX.Element {
    * The purchases worth narrowing to, fetched once.
    *
    * Not year-scoped and not re-fetched per side: the list is the same question
-   * whichever table is showing, and it only changes when somebody links a sale
-   * to a purchase — which is not something that happens while this screen is
-   * open.
+   * whichever table is showing. It changes when somebody links a sale to a
+   * purchase — which USED to be impossible while this screen was open, and is
+   * now one of the things this screen does, so it re-reads on `reloadKey` like
+   * the rows themselves.
    */
+  /**
+   * ATTACHING A PURCHASE ORDER FROM HERE.
+   *
+   * The owner: "I want to go into the finance history and attach POs to the
+   * SOs." The Attach screen existed and was only reachable from the Sales
+   * Orders board — which shows the CURRENT pipeline. An order settled months
+   * ago has left that board, and History is where somebody goes looking for it,
+   * so the one place you can see an old sale was the one place you could not
+   * fix its provenance.
+   *
+   * The full invoice is fetched on the press rather than carried on every row:
+   * the picker ranks its offers by the sale's own supplier, which a history row
+   * does not carry, and one read on a button press is cheaper than widening
+   * every row in the table to serve a button most of them will never use.
+   */
+  const [attaching, setAttaching] = useState<Invoice | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  const openAttach = async (invoiceId: string): Promise<void> => {
+    // Silent on a failed read: the row is still there and the panel is still
+    // open, so nothing has been lost — pressing again is the whole recovery.
+    const full = await api.invoices.get(invoiceId).catch(() => null)
+    if (full) setAttaching(full)
+  }
+
   useEffect(() => {
     void finance.historySources().then(setSources)
-  }, [])
+  }, [reloadKey])
 
   // Re-read on every (side, year, source) change. Both lists are kept so
   // flipping back and forth does not refetch, and both are cleared when either
@@ -132,6 +161,7 @@ export function HistoryTab(): JSX.Element {
     // read of the whole sales ledger every time somebody opened the tickets tab.
     if (side === 'tickets' || side === 'deleted') return
     let alive = true
+    void reloadKey
     if (side === 'purchase') {
       setPos(null)
       void finance.historyPurchaseOrders(year, source).then((r) => alive && setPos(r))
@@ -142,7 +172,7 @@ export function HistoryTab(): JSX.Element {
     return () => {
       alive = false
     }
-  }, [side, year, source])
+  }, [side, year, source, reloadKey])
 
   const yearsFor =
     side === 'tickets'
@@ -368,13 +398,33 @@ export function HistoryTab(): JSX.Element {
                   'supplier' in r ? (
                     <PoRow key={r.id} row={r} open={open === r.id} onToggle={setOpen} />
                   ) : (
-                    <SoRow key={r.id} row={r} open={open === r.id} onToggle={setOpen} />
+                    <SoRow
+                      key={r.id}
+                      row={r}
+                      open={open === r.id}
+                      onToggle={setOpen}
+                      onAttach={openAttach}
+                    />
                   )
                 )}
               </tbody>
             </table>
           </div>
         </>
+      )}
+
+      {/* THE SAME SCREEN THE SALES ORDERS BOARD OPENS, not a second one.
+          Attaching is one act with one set of rules, and a History-only copy of
+          it would be a second place for those rules to drift. On done the rows
+          AND the source list are re-read, because both of them are answers to
+          "which purchase supplied this" and this is now the screen that changes
+          it. */}
+      {attaching && (
+        <AttachPurchaseOrderModal
+          invoice={attaching}
+          onClose={() => setAttaching(null)}
+          onDone={() => setReloadKey((n) => n + 1)}
+        />
       )}
     </div>
   )
@@ -461,11 +511,14 @@ function PoRow({
 function SoRow({
   row,
   open,
-  onToggle
+  onToggle,
+  onAttach
 }: {
   row: SalesOrderHistoryRow
   open: boolean
   onToggle: (id: string | null) => void
+  /** Open the attach screen for this sale. See the note on `attaching`. */
+  onAttach: (id: string) => void
 }): JSX.Element {
   return (
     <>
@@ -522,21 +575,49 @@ function SoRow({
                   any one line says about its own cases — and on a dropship it
                   is usually the only one there is, because the two documents
                   share no catalog product at all. */}
-              {row.sourcePos.length > 0 && (
-                <div className="hist-went">
-                  <span className="hist-went-label">
-                    <Icon name="Link" size={13} /> Supplied by
-                  </span>
-                  <span className="hist-went-list">
-                    {row.sourcePos.map((p) => (
+              {/* SUPPLIED BY, AND NOW EDITABLE FROM HERE.
+
+                  It was read-only, and the button that changes it lived on the
+                  Sales Orders board — which shows the CURRENT pipeline. A sale
+                  settled months ago has left that board, so the one screen where
+                  somebody can find an old order was the one screen where its
+                  provenance could not be fixed.
+
+                  ALWAYS SHOWN, not only when something is already attached: a
+                  sale with no purchase behind it is precisely the one somebody
+                  came here to correct, and a button that appeared only once the
+                  job was done would be useless. */}
+              <div className="hist-went">
+                <span className="hist-went-label">
+                  <Icon name="Link" size={13} /> Supplied by
+                </span>
+                <span className="hist-went-list">
+                  {row.sourcePos.length > 0 ? (
+                    row.sourcePos.map((p) => (
                       <span key={p.poId} className="hist-went-one">
                         <b className="mono">{p.poNumber}</b>
                         {p.supplier ? ` ${p.supplier}` : ''}
                       </span>
-                    ))}
-                  </span>
-                </div>
-              )}
+                    ))
+                  ) : (
+                    <span className="hist-went-none">nothing attached</span>
+                  )}
+                  <button
+                    type="button"
+                    className="hist-attach"
+                    title="Attach or detach the purchase orders that supplied this sale"
+                    onClick={(e) => {
+                      // The row itself toggles open on click, so this must not
+                      // bubble or pressing it would close the panel it sits in.
+                      e.stopPropagation()
+                      onAttach(row.id)
+                    }}
+                  >
+                    <Icon name="Link" size={12} />
+                    {row.sourcePos.length > 0 ? 'Change' : 'Attach a purchase order'}
+                  </button>
+                </span>
+              </div>
               <Lines lines={row.lines} settledLabel="Out" />
             </div>
           </td>

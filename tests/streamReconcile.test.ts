@@ -28,7 +28,7 @@
  *
  * Run: npm run test:stream-reconcile
  */
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 const DIR = process.env.TEST_DB_DIR || join(process.cwd(), 'out/tests/stream-recon-db')
 process.env.TEST_DB_DIR = DIR
@@ -1291,6 +1291,178 @@ ok(
   `${stockQty(PART_P, 'RM')} vs ${shelfBefore}`
 )
 ok(lotStockGap(PART_P) === 0, 'with the layers exactly consistent again', String(lotStockGap(PART_P)))
+
+// ===========================================================================
+console.log('\n=== A RECONCILIATION THAT TAKES ITS STOCK OFF THE SHELF ===')
+// ===========================================================================
+/*
+ * The owner: "when I am reconciling a break and putting something from the
+ * inventory then it needs to come in from the inventory and pull from there
+ * directly."
+ *
+ * Past the window the default is right for the ordinary case — the stock has
+ * already gone, counted off after the show, and deducting it again would take
+ * the same cases off twice. But the cases are often still sitting there, and
+ * then the layers they arrived on already say what they cost to the cent. Typing
+ * a price for those invents a second, hand-keyed figure for stock the app can
+ * value exactly, and leaves the shelf holding cases that were opened on air.
+ *
+ * SO IT IS A CHOICE, and this section is the half that moves stock.
+ */
+const SHELF_P = make({
+  name: 'SR Shelf Product Hobby 12-Box Case',
+  unitType: 'case',
+  boxesPerCase: 12,
+  cost: 1000,
+  open: 5
+})
+// Its own show: the sections above delete some of theirs, and a section that
+// borrows one is a section that breaks whenever an earlier one is reordered.
+const SHELF_SHOW = mkSession('SR Shelf Pull Show', at(33, 20), at(33, 23))
+const SHELF_LIVE = mkSession('SR Shelf Tonight', at(0, 13), at(0, 15))
+
+{
+  const beforeShelf = stockQty(SHELF_P, 'RM')
+  const beforeAvgS = getProduct(SHELF_P).unitCost
+  ok(beforeShelf === 5, 'five cases on the shelf to start', String(beforeShelf))
+
+  // A stated price beside it is refused rather than ignored: the line is costed
+  // by the layers it takes, so a price is a second answer to a settled question.
+  const both = addItem(
+    { sessionId: SHELF_SHOW, kind: 'break', productId: SHELF_P, cases: 1, casePrice: 2400, fromShelf: true, location: 'RM' },
+    null
+  )
+  ok(!both.ok, 'a shelf pull with a price beside it is refused', both.error)
+  ok(
+    /coming off the shelf/i.test(String(both.error)),
+    'and the sentence says which of the two to drop',
+    String(both.error)
+  )
+
+  // MORE THAN THE SHELF HOLDS. Partly off the shelf would book some cases at
+  // what they cost and the rest at nothing — precise-looking and wrong.
+  const tooMany = addItem(
+    { sessionId: SHELF_SHOW, kind: 'break', productId: SHELF_P, cases: 9, fromShelf: true, location: 'RM' },
+    null
+  )
+  ok(!tooMany.ok, 'MORE THAN THE SHELF HOLDS IS REFUSED', tooMany.error)
+  ok(/holds 5/.test(String(tooMany.error)), 'naming what is actually there', String(tooMany.error))
+  ok(stockQty(SHELF_P, 'RM') === beforeShelf, 'and nothing moved on the refusal')
+
+  // THE REAL THING. Two cases off a past show, taken from the shelf.
+  const pulled = addItem(
+    { sessionId: SHELF_SHOW, kind: 'break', productId: SHELF_P, cases: 2, fromShelf: true, location: 'RM', breakNumber: 9 },
+    null
+  )
+  ok(pulled.ok, 'two cases come off the shelf on a past show', pulled.error)
+  const pLine = lastItem(SHELF_SHOW) as Record<string, unknown>
+
+  ok(stockQty(SHELF_P, 'RM') === 3, 'THE COUNT DROPPED — five cases became three', String(stockQty(SHELF_P, 'RM')))
+  ok(
+    eq(pLine.costTotal as number, 2000),
+    'and it booked what the layers actually cost, $1,000 a case — not a typed price',
+    String(pLine.costTotal)
+  )
+  ok(eq(pLine.unitCost as number, 1000), 'per stock unit, from the layers', String(pLine.unitCost))
+  ok(
+    'statedCasePrice' in pLine,
+    'the line carries the stated-price field at all — the next check depends on it'
+  )
+  ok(
+    pLine.statedCasePrice === null,
+    'AND IT IS NULL, which is how undo and edit know this line moved stock',
+    String(pLine.statedCasePrice)
+  )
+  ok(itemLotRows(String(pLine.id)) > 0, 'and it consumed cost layers, which a reconciliation never does')
+  ok(lotStockGap(SHELF_P) === 0, 'the shelf and its layers agree afterwards', String(lotStockGap(SHELF_P)))
+  ok(eq(getProduct(SHELF_P).unitCost, beforeAvgS), 'the average is untouched — the layers left are the same price')
+
+  // AND THE OTHER ANSWER STILL WORKS on the same product, unchanged.
+  const priced = addItem(
+    { sessionId: SHELF_SHOW, kind: 'break', productId: SHELF_P, cases: 1, casePrice: 2400, location: 'RM' },
+    null
+  )
+  ok(priced.ok, 'and a priced reconciliation of the same product still works', priced.error)
+  ok(stockQty(SHELF_P, 'RM') === 3, 'MOVING NOTHING, as it always did', String(stockQty(SHELF_P, 'RM')))
+  const prLine = lastItem(SHELF_SHOW) as Record<string, unknown>
+  ok(eq(prLine.costTotal as number, 2400), 'and booking the price that was typed', String(prLine.costTotal))
+  ok(prLine.statedCasePrice !== null, 'with a stated price on it', String(prLine.statedCasePrice))
+}
+
+// A SHOW STILL INSIDE THE WINDOW IGNORES THE FLAG, because every line there
+// already comes off the shelf. A flag that meant nothing would be one somebody
+// eventually sets expecting it to do something.
+{
+  const LIVE_P = make({
+    name: 'SR Live Flag Product Hobby 12-Box Case',
+    unitType: 'case',
+    boxesPerCase: 12,
+    cost: 500,
+    open: 4
+  })
+  const res = addItem(
+    { sessionId: SHELF_LIVE, kind: 'break', productId: LIVE_P, cases: 1, fromShelf: true, location: 'RM' },
+    null
+  )
+  ok(res.ok, 'a show still inside the window accepts the flag without complaint', res.error)
+  ok(stockQty(LIVE_P, 'RM') === 3, 'and takes the case off the shelf as it always would', String(stockQty(LIVE_P, 'RM')))
+}
+
+// ===========================================================================
+console.log('\n=== THE TRANSPORT HANDLER FORWARDS EVERY FIELD ===')
+// ===========================================================================
+/*
+ * `allocation` was missing from the handler's payload for two releases. The
+ * picker was on the form, the write read `input.allocation`, and the handler
+ * rebuilt the object field by field without it — so every allocation an operator
+ * chose was dropped in transit and the oldest layers were consumed instead. No
+ * error, no warning: the picker opened, the choice was made, and the write never
+ * saw it.
+ *
+ * That is the same failure `statedPayout` had on the finance boundary, and the
+ * same shape: a handler that lists the fields is a second copy of the contract,
+ * and the two drift silently because every field is optional and a missing one
+ * looks exactly like one nobody filled in.
+ *
+ * SO THIS READS THE HANDLER'S SOURCE. There is no way to call an ipcMain handler
+ * from here, and the property being guarded is a property of the code — every
+ * field of NewStreamItem that carries a decision has to appear in it. A
+ * regex over source is blunt, but the alternative is the silence above.
+ */
+{
+  const handler = readFileSync(join(process.cwd(), 'src/main/streamingIpc.ts'), 'utf8')
+  const addBlock = handler.slice(
+    handler.indexOf('IPC.streamItemAdd'),
+    handler.indexOf('IPC.streamItemAdd') + 4000
+  )
+  // MATCHED AS AN ASSIGNMENT, not as a word. Every one of these names also
+  // appears in the prose around the handler — including, now, a comment about
+  // the one that went missing — so a search for the word would pass on a handler
+  // that talks about a field and never forwards it. Which is precisely the
+  // failure being guarded.
+  for (const field of [
+    'sessionId',
+    'kind',
+    'productId',
+    'location',
+    'breakNumber',
+    'recipient',
+    'note',
+    'quantity',
+    'cases',
+    'boxes',
+    'packs',
+    'casePrice',
+    'fromShelf',
+    'allocation'
+  ]) {
+    ok(
+      new RegExp(`(^|[^.\\w])${field}\\s*:|payload\\.${field}\\s*=`, 'm').test(addBlock),
+      `${field} is assigned into the payload the write receives`,
+      'named nowhere in the add-item handler as an assignment'
+    )
+  }
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

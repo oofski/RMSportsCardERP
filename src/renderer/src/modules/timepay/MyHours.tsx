@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   PAYROLL_ANCHOR,
+  PAYROLL_CLOSES_ON,
   PAYROLL_EVERY_DAYS,
+  PAYROLL_OPENS_ON,
+  PAYROLL_PAY_WEEKDAY,
+  PAYROLL_RUN_WEEKDAY,
   PAYROLL_PAY_LAG_DAYS,
   PAYROLL_RUN_LAG_DAYS,
   dayKey
@@ -194,7 +198,9 @@ export function MyHours(): JSX.Element {
           <div className="panel-head">
             <div>
               <h3>Pay periods</h3>
-              <span className="ph-sub">Sunday to Saturday, every fortnight</span>
+              <span className="ph-sub">
+                  {PAYROLL_OPENS_ON} to {PAYROLL_CLOSES_ON}, every fortnight
+                </span>
             </div>
           </div>
           <div className="metric-list">
@@ -209,10 +215,17 @@ export function MyHours(): JSX.Element {
             ))}
           </div>
           <p className="mh-note">
-            A period is {PAYROLL_EVERY_DAYS} days of work, Sunday to Saturday. Payroll is run{' '}
-            {PAYROLL_RUN_LAG_DAYS} days after it closes and the money lands{' '}
-            {PAYROLL_PAY_LAG_DAYS} days after it closes — so a fortnight ending on a Saturday is run
-            that Wednesday and paid that Friday. The series starts {shortDate(PAYROLL_ANCHOR)}.
+            {/* EVERY WEEKDAY HERE IS DERIVED FROM THE ANCHOR, not typed. This
+                sentence said "Sunday to Saturday" for weeks after the fortnight
+                moved to Monday–Sunday: the dates listed directly above it were
+                right and the words beside them described a different schedule,
+                and nothing failed because a sentence cannot fail. See
+                PAYROLL_OPENS_ON in @shared/homeTasks. */}
+            A period is {PAYROLL_EVERY_DAYS} days of work, {PAYROLL_OPENS_ON} to{' '}
+            {PAYROLL_CLOSES_ON}. Payroll is run {PAYROLL_RUN_LAG_DAYS} days after it closes and the
+            money lands {PAYROLL_PAY_LAG_DAYS} days after it closes — so a fortnight ending on a{' '}
+            {PAYROLL_CLOSES_ON} is run that {PAYROLL_RUN_WEEKDAY} and paid that{' '}
+            {PAYROLL_PAY_WEEKDAY}. The series starts {shortDate(PAYROLL_ANCHOR)}.
           </p>
         </div>
       </div>

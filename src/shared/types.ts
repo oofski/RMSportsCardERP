@@ -434,7 +434,14 @@ export interface InventoryStats {
    * Returned so the difference can be stated on screen rather than discovered:
    * totalValue − totalCost = spread + outsideSpreadValue, exactly, and without
    * this field the three tiles would be a subtraction that does not reconcile.
-   * It is the same money the `outsideSpread` rows of `zeroCost` name.
+   *
+   * IT IS NO LONGER THE SAME MONEY `zeroCost` NAMES, and the difference is
+   * deliberate. This is arithmetic and must account for every uncosted box on
+   * every shelf; `zeroCost` is a work queue and leaves out stock sitting only on
+   * a roadshow shelf, which is uncosted on purpose while a shop is running. So
+   * this figure can exceed what the banner lists, and filtering it to match
+   * would break the identity above — which is the one thing this field exists to
+   * keep true.
    */
   outsideSpreadValue: number
   /** How many products that is. */
@@ -456,10 +463,17 @@ export interface InventoryStats {
    *
    * Every row here is money the app cannot fully account for; `outsideSpread`
    * says which way. A BOX with no cost is market value the Spread is leaving
-   * out — an incomplete number, and the amount is `outsideSpreadValue`.
-   * Anything else with no cost is market value the Spread is still counting as
-   * profit — a wrong number, which is what this list was built for: seven such
-   * products were once enough to make 48% of a real Spread fictional.
+   * out — an incomplete number. Anything else with no cost is market value the
+   * Spread is still counting as profit — a wrong number, which is what this list
+   * was built for: seven such products were once enough to make 48% of a real
+   * Spread fictional.
+   *
+   * A WORK QUEUE, NOT A TOTAL. Stock sitting only on a roadshow shelf is left
+   * out: a shop that is still running carries its cases at zero until somebody
+   * settles what they cost, and listing that as something to fix would keep the
+   * banner permanently full of rows nobody should act on — which is how the
+   * genuinely wrong ones stop being read. `outsideSpreadValue` still counts that
+   * money, so the two can differ; see the note there.
    *
    * Both are surfaced beside the tile rather than folded into it, because the
    * fix (put the real cost on the product) is one the operator can act on and
@@ -511,6 +525,21 @@ export interface CostBasisFix {
   layersRevalued: number
   /** The product's cost basis after the write, read the way the banner reads it. */
   costValue: number
+  /**
+   * WHAT THE PURCHASE ORDERS BEHIND THAT STOCK DID ABOUT IT.
+   *
+   * Reported rather than done silently, for the same reason `costValue` is:
+   * pricing from the shelf used to leave the purchase order reading $0.00 and
+   * nothing said otherwise, so the operator had no way to know the document was
+   * still wrong. Zeroes here are an ordinary answer — hand-counted stock has no
+   * order behind it, and a line that already carried a real price is left alone.
+   */
+  ordersPriced: {
+    linesPriced: number
+    ordersRestated: number
+    salesRestated: number
+    poNumbers: string[]
+  }
 }
 
 /** One shelf where Σ lot.qty_remaining and inventory_stock.quantity disagree. */
@@ -1098,6 +1127,15 @@ export interface PurchaseOrder {
   updatedAt: string
   orderedAt: string | null
   paidAt: string | null
+  /**
+   * WHAT HAS ACTUALLY BEEN SENT so far, summed from the order's payments.
+   *
+   * On the SUMMARY as well as the detail, because the board has to be able to
+   * say "part paid" without opening every card. `paidAt` alone could only ever
+   * say settled or not, and an order half wired looked exactly like one nothing
+   * had been sent on.
+   */
+  amountPaid: number
   receivedAt: string | null
   cancelledAt: string | null
   /** When the PO's cases were scanned into stock (idempotency guard). */
@@ -1126,6 +1164,64 @@ export interface PurchaseOrder {
 /** A PO with its line items (detail view + receipt). */
 export interface PurchaseOrderDetail extends PurchaseOrder {
   lines: PurchaseOrderLine[]
+  /** Money on this order that bought no goods. See PurchaseOrderAdjustment. */
+  adjustments: PurchaseOrderAdjustment[]
+  /** What has actually been sent, one row per payment. See PurchaseOrderPayment. */
+  payments: PurchaseOrderPayment[]
+}
+
+/**
+ * MONEY ACTUALLY SENT AGAINST A PURCHASE ORDER.
+ *
+ * The owner: "sometimes we pay part of a PO."
+ *
+ * `paid_at` was the whole story — one stamp meaning the money has gone — so an
+ * order half wired read exactly like one nothing had been sent on. These are the
+ * payments themselves.
+ *
+ * A ROW EACH, not a running total on the order. Two part-payments are two facts,
+ * each with its own date and its own reason, and a total would lose both the
+ * moment it was written. Append-only, so "when did we pay the rest of that" is
+ * answerable months later.
+ *
+ * POSITIVE, always. A credit from the supplier is not a negative payment — it
+ * changes what the order COST, which is what a `PurchaseOrderAdjustment` is for.
+ * Keeping the two apart is what lets the balance mean one thing.
+ */
+export interface PurchaseOrderPayment {
+  id: string
+  poId: string
+  /** What was sent. Always greater than zero. */
+  amount: number
+  /** Which wire, which card, which cheque. Optional. */
+  note: string | null
+  createdAt: string
+}
+
+/**
+ * MONEY ON A PURCHASE ORDER THAT BOUGHT NOTHING.
+ *
+ * The owner: "we wired some 5000 but actually paid them 4900 because of another
+ * deal ... a payment adjustment that doesnt tie back to inventory but just we
+ * can add nothing to discrepancy."
+ *
+ * A credit carried over from a previous deal, a shortfall settled on the next
+ * wire, a rebate agreed after the fact. It belongs to the ORDER, not to any line
+ * on it, and that distinction is the whole design: it changes what the order
+ * cost and what was paid, and it never reaches a shelf.
+ *
+ * SIGNED. Negative is the owner's case and the common one — we paid less than
+ * the goods came to. Positive is a charge added on settlement. One field, either
+ * sign, so nothing downstream has to ask which kind it is holding.
+ */
+export interface PurchaseOrderAdjustment {
+  id: string
+  poId: string
+  /** Negative for a credit, positive for an extra charge. Never zero. */
+  amount: number
+  /** Why. Optional, but the reason is the thing somebody needs six months on. */
+  note: string | null
+  createdAt: string
 }
 
 /** A Cost-of-Goods-Sold ledger entry recorded when a PO (a purchase) is created. */

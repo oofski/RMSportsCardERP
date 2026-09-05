@@ -1,4 +1,5 @@
 import { writeFileSync } from 'fs'
+import { asPaymentTiming } from '@shared/freight'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { shell } from 'electron'
@@ -38,6 +39,8 @@ import {
   setInvoiceItemsInHand,
   setInvoiceLineRouting,
   setInvoiceLines,
+  setInvoicePaymentTiming,
+  setInvoiceShippingCost,
   setInvoicePaid,
   linkDropshipPair,
   linkablePurchaseOrders,
@@ -805,6 +808,61 @@ export function registerOrderExtrasIpc(): void {
     }
   )
 
+  /**
+   * WHAT POSTING A SALE COST US, corrected after it has gone out.
+   *
+   * Same permission as the line editor above and for the same reason. This one
+   * moves less, not more: postage is a cost we carry, absent from the invoice
+   * total and never sent to Intuit, so nothing here can make our copy of a
+   * posted document disagree with theirs.
+   */
+  ipcMain.handle(
+    IPC.invoiceSetShippingCost,
+    (_e, payload: { id?: unknown; shippingCost?: unknown }): Result<InvoiceDetail> => {
+      try {
+        requireInvoicing()
+        // An empty box and a missing key both mean "nobody has said", which is
+        // a different fact from zero — orderShippingCost falls back to the
+        // parcel labels on a null and must not be handed a 0 instead.
+        const raw = payload?.shippingCost
+        const cost = raw === null || raw === undefined || raw === '' ? null : Number(raw)
+        if (cost !== null && (!Number.isFinite(cost) || cost < 0)) {
+          return { ok: false, error: 'Postage has to be a number, and not a negative one.' }
+        }
+        const res = setInvoiceShippingCost(str(payload?.id), cost)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * WHEN THIS BUYER PAYS. See setInvoicePaymentTiming.
+   *
+   * An intention about a deal, revisable like any other — it could only be set
+   * on the create form until now, which is refused the moment an invoice posts.
+   */
+  ipcMain.handle(
+    IPC.invoiceSetPaymentTiming,
+    (_e, payload: { id?: unknown; paymentTiming?: unknown }): Result<InvoiceDetail> => {
+      try {
+        const actor = requireInvoicing()
+        // NOT SAID is a real third answer and clears rather than defaulting —
+        // see PaymentTiming, which keeps null distinct for exactly this reason.
+        const timing = asPaymentTiming(payload?.paymentTiming)
+        const res = setInvoicePaymentTiming(str(payload?.id), timing, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
   ipcMain.handle(
     IPC.invoiceSetItemsInHand,
     (_e, payload: { id?: unknown; inHand?: unknown }): Result<InvoiceDetail> => {
@@ -858,10 +916,22 @@ export function registerOrderExtrasIpc(): void {
    */
   ipcMain.handle(
     IPC.orderLinkablePos,
-    (_e, invoiceId: unknown): Result<LinkablePurchaseOrder[]> => {
+    (_e, payload: unknown): Result<LinkablePurchaseOrder[]> => {
       try {
         requireInvoicing()
-        return { ok: true, data: linkablePurchaseOrders(str(invoiceId)) }
+        /**
+         * A BARE ID IS STILL ACCEPTED. The picker sends an object now, but a
+         * renderer from before this change sends the id on its own — and the
+         * web build ships one bundle to browsers that may not have reloaded.
+         */
+        const req =
+          typeof payload === 'string' || payload === null || payload === undefined
+            ? { invoiceId: str(payload), query: '' }
+            : (payload as { invoiceId?: unknown; query?: unknown })
+        return {
+          ok: true,
+          data: linkablePurchaseOrders(str(req.invoiceId), 60, str(req.query ?? ''))
+        }
       } catch (err) {
         return fail(err)
       }

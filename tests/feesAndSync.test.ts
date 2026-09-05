@@ -767,5 +767,117 @@ ok(
 )
 
 
+// ---------------------------------------------------------------------------
+console.log('\n=== FEES AND COSTS IS ONE SECTION, AND NET PROFIT DOES NOT MOVE ===')
+// ---------------------------------------------------------------------------
+/*
+ * Whatnot's month-end summary prints one "Fees & costs" total over six lines.
+ * This statement printed those same charges as FOUR sections — Platform fees,
+ * Shipping, Other show costs, Adjustments — so there was no figure anywhere in
+ * the app that could be put beside the platform's own total. The owner:
+ * "everything under fees should be under the fees."
+ *
+ * THE RISK OF THAT REGROUPING IS DOUBLE COUNTING, and it is the only risk: a
+ * line left behind in its old section as well as its new one would be
+ * subtracted twice and net profit would silently fall. So the assertion that
+ * matters is not that the fee subtotal looks right — it is that the sections
+ * still sum to the SAME net profit, with every bucket non-zero.
+ */
+{
+  const day = {
+    streamDate: '2026-04-06',
+    netSales: 900,
+    grossSales: 1000,
+    saleCount: 20,
+    feeSaleCount: 20,
+    tips: 50,
+    bonuses: 30,
+    // 1000 sold + 50 tips + 30 bonuses + 20 the classifier could not name.
+    totalRevenue: 1100,
+    salesTax: 0,
+    whatnotFee: -80,
+    processingFee: -20,
+    totalFees: -100,
+    shippingSubsidy: 10,
+    shippingCharges: -30,
+    giveawayShipping: -15,
+    refundShipping: -5,
+    netShipping: -40,
+    showBoost: -25,
+    reversals: -35,
+    generalExpenses: -50,
+    generalExpenseCount: 2,
+    breakCost: -250,
+    giveawayCost: -50,
+    cogs: -300,
+    grossProfit: 800,
+    // grossProfit + totalFees + netShipping + showBoost + generalExpenses + reversals
+    netProfit: 550
+  }
+
+  const sections = buildPnl(day)
+  const byKey = (k: string): any => sections.find((s: any) => s.key === k)
+
+  ok(
+    near(pnlChecksum(sections), day.netProfit),
+    'THE SECTIONS STILL SUM TO NET PROFIT with every bucket non-zero',
+    `${pnlChecksum(sections)} vs ${day.netProfit}`
+  )
+
+  const fees = byKey('fees')
+  ok(!!fees && fees.label === 'Fees & costs', 'the section is named as the platform names it', fees && fees.label)
+  ok(
+    near(fees.subtotal, -200),
+    'and its subtotal is the six charges together, not the two the app models',
+    String(fees && fees.subtotal)
+  )
+
+  // EVERY LINE PRESENT, so the section can be read beside the document.
+  for (const k of [
+    'whatnotFee',
+    'processingFee',
+    'shippingSubsidy',
+    'shippingCharges',
+    'giveawayShipping',
+    'refundShipping',
+    'showBoost',
+    'reversals'
+  ]) {
+    ok(fees.lines.some((l: any) => l.key === k), `${k} is a line under Fees & costs`)
+  }
+
+  // AND NOWHERE ELSE. A section left behind is the double count.
+  ok(!byKey('shipping'), 'there is no separate Shipping section left over')
+  ok(!byKey('showCosts'), 'nor Other show costs')
+  ok(!byKey('adjustments'), 'nor Adjustments and exceptions')
+
+  // GENERAL EXPENSES IS NOT PLATFORM MONEY and keeps its own section. Whatnot
+  // never saw a pack somebody opened on air, so folding it in would make the
+  // subtotal half auditable and half not.
+  const general = byKey('general')
+  ok(!!general && near(general.subtotal, -50), 'what the operator typed keeps its own section', general && general.subtotal)
+  ok(
+    !fees.lines.some((l: any) => l.key === 'generalExpenses'),
+    'AND IS NOT INSIDE FEES — the platform never charged it',
+  )
+
+  // THE TILES READ THESE SUBTOTALS, so these two assertions are the tiles.
+  // `sectionSubtotal` itself lives in the renderer and cannot be required here,
+  // but it is a lookup by key over exactly this array.
+  const revenue = byKey('revenue').subtotal
+  ok(
+    near(revenue, 1100),
+    'revenue is everything the platform credited — sales, tips and adjustments',
+    String(revenue)
+  )
+  // Earnings less Fees & costs is the payout, which is the identity the whole
+  // month-end form rests on: the one figure the ledger holds its own copy of.
+  ok(
+    near(revenue + fees.subtotal, 900),
+    'AND THE TWO TILES NOW SUBTRACT TO THE PAYOUT',
+    String(revenue + fees.subtotal)
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

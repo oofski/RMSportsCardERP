@@ -496,8 +496,82 @@ async function main(): Promise<void> {
   ok(dead.startsWith('fetch failed'), 'while keeping the original text rather than inventing one')
   ok(explainQboRelayProblem('') !== '', 'an empty error still says something')
 
+  /**
+   * THE MESSAGE NODE ACTUALLY PRODUCES, which was the one shape this missed.
+   *
+   * `controller.abort()` — what the relay's own timeout calls — throws
+   * "This operation was aborted". The check looked for "the operation was
+   * aborted", which is what `AbortSignal.timeout()` says and nothing here uses.
+   * One word, and the timeout this app causes itself was the only transport
+   * failure that did not read as one.
+   */
+  ok(
+    isRelayTransportFailure('This operation was aborted'),
+    'THE ABORT NODE ACTUALLY THROWS is a transport failure — "This", not "The", and the ' +
+      'difference was the whole bug'
+  )
+  ok(
+    isRelayTransportFailure('The operation was aborted due to timeout'),
+    'and so is the other spelling, which is what AbortSignal.timeout says'
+  )
+  ok(isRelayTransportFailure('AbortError'), 'and the bare error name, however it reaches here')
   ok(isRelayTransportFailure('fetch failed'), 'a dead socket is a transport failure')
   ok(isRelayTransportFailure('Relay error 500.'), 'and so is a relay 500')
+
+  /**
+   * EVERY CALL OUT OF THE WORKER HAS A DEADLINE.
+   *
+   * It had none, and that is the whole reason a stuck QuickBooks call produced
+   * silence rather than an error: the app asks the relay, the relay asks Intuit,
+   * and with nothing bounding the second hop the only observable event was the
+   * APP giving up — which names the wrong end of the chain.
+   *
+   * Asserted against the FILE because the Worker is deployed by hand and never
+   * imported by these tests. A bare fetch added later would reintroduce exactly
+   * this, invisibly.
+   */
+  {
+    const worker = require('node:fs').readFileSync('cloud/worker.js', 'utf8') as string
+    const intuitHosts = ['QBO_TOKEN_URL', 'QBO_REVOKE_URL']
+    const bare = intuitHosts.filter((h) =>
+      new RegExp(`fetch\\(\\s*${h}`).test(worker)
+    )
+    ok(
+      bare.length === 0,
+      'NO CALL TO INTUIT IS MADE WITH A BARE fetch — they all go through qboUpstream, which ' +
+        'carries the deadline. Without one, a quiet Intuit hangs the relay for ever and the ' +
+        'app can only report itself giving up',
+      bare.join(', ')
+    )
+    ok(
+      /AbortSignal\.timeout\(QBO_UPSTREAM_TIMEOUT_MS\)/.test(worker),
+      'and the deadline is a real AbortSignal, not a comment about one'
+    )
+    ok(
+      /TimeoutError|AbortError/.test(worker) && /did not answer within/.test(worker),
+      'AND A TIMEOUT COMES BACK AS A SENTENCE naming Intuit and the stage, rather than as a ' +
+        'dropped connection the app has to guess about'
+    )
+  }
+  {
+    const said = explainQboRelayProblem('This operation was aborted')
+    ok(
+      /did not answer in time/i.test(said) && /NOTHING WAS REFUSED/.test(said),
+      'A TIMEOUT IS EXPLAINED AS A TIMEOUT, not repeated as "aborted" — which reads like ' +
+        'QuickBooks looked at the invoice and said no, when nothing looked at it',
+      said
+    )
+    ok(
+      !/^This operation was aborted/.test(said),
+      'and the raw wording does not lead the sentence, because it sent people to check their ' +
+        'QuickBooks data for a fault that was never there'
+    )
+    ok(
+      /Cloudflare/i.test(said),
+      'and it names where the answer actually is — the Worker log',
+      said
+    )
+  }
   ok(
     !isRelayTransportFailure('QuickBooks: Invalid Reference Id — Names element id not found'),
     'AND AN INTUIT REFUSAL IS NOT — retrying that unchanged never works'

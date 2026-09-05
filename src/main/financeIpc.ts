@@ -37,6 +37,14 @@ import { emptyPnlDetail } from '@shared/pnlDrill'
 import { pnlDetail } from './db/pnlDrill'
 import type { BreakPnlSplit } from '@shared/breakPnl'
 import { breakPnlForDay } from './db/breakPnl'
+import type { RevenueCheck, StatementInput, WhatnotStatement } from '@shared/statementFit'
+import { statementInputFromRaw } from '@shared/statementFit'
+import {
+  deleteStatement,
+  listStatements,
+  revenueCheck,
+  saveStatement
+} from './db/whatnotStatements'
 import {
   deleteImport,
   emptyView,
@@ -289,6 +297,11 @@ export function registerFinanceIpc(): void {
             taxRate: input?.taxRate as number,
             processingRate: input?.processingRate as number,
             processingFlatCents: input?.processingFlatCents as number,
+            // Passed through UNTOUCHED, never defaulted here. An absent scope
+            // means 'all' and the store says so; a present but unknown one must
+            // reach the validator and be refused, because silently widening a
+            // period somebody meant to narrow prices rows it was never meant to.
+            scope: input?.scope,
             note: str(input?.note)
           },
           actor.id
@@ -307,6 +320,74 @@ export function registerFinanceIpc(): void {
       return fail(err)
     }
   })
+
+  // ---- What the platform says, and whether we agree ------------------------
+  //
+  // The one external anchor a derived revenue figure has. Reads are gated like
+  // every other finance read; writing one needs `finance.manage`, because a
+  // stated figure is what a rate gets fitted to and a wrong one would be saved
+  // straight into the terms that price every show in the window.
+
+  ipcMain.handle(IPC.finStatements, (): WhatnotStatement[] =>
+    can('module.finance') ? listStatements() : []
+  )
+
+  ipcMain.handle(
+    IPC.finStatementSave,
+    (_e, input: StatementInput): Result<WhatnotStatement[]> => {
+      try {
+        const actor = requireManage()
+        return saveStatement(statementInputFromRaw(input), actor.id)
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.finStatementDelete, (_e, id: string): Result<WhatnotStatement[]> => {
+    try {
+      requireManage()
+      return deleteStatement(str(id).trim())
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  /**
+   * Compare a stated figure against what this app derives for the same days.
+   *
+   * A READ, and it stores nothing. Running the check must never be the thing
+   * that changes a number — the operator looks at the answer and then decides
+   * whether to save the fitted rate, which is a separate call through
+   * `finRateSave` and a separate decision.
+   */
+  ipcMain.handle(
+    IPC.finRevenueCheck,
+    (
+      _e,
+      input: {
+        fromDate?: string
+        toDate?: string
+        statedGross?: number
+        statedPayout?: number | null
+      }
+    ): RevenueCheck | null => {
+      if (!can('module.finance')) return null
+      const view = streamingFinanceView()
+      return revenueCheck(view.days, listRatePeriods(), {
+        fromDate: str(input?.fromDate).trim(),
+        toDate: str(input?.toDate).trim(),
+        statedGross: Number(input?.statedGross) || 0,
+        // Absent and null both mean "the document did not say", which is the
+        // ordinary case — a dashboard reading states sales alone. Only a real
+        // number turns the payout comparison on.
+        statedPayout:
+          input?.statedPayout === undefined || input.statedPayout === null
+            ? null
+            : Number(input.statedPayout)
+      })
+    }
+  )
 
   // ---- General expenses ----------------------------------------------------
   //

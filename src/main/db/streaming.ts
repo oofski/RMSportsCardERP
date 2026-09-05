@@ -19,6 +19,7 @@ import {
   durationMinutes,
   hostFromCrew,
   isPastDatedSession,
+  shelfCanCover,
   normalizeCrew,
   parseMoneyInput,
   sessionsOverlap,
@@ -985,6 +986,20 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
     // stream's calendar date is no longer part of the answer: it made the grace
     // period depend on what time the show happened to finish.
     const reconcile = isPastDatedSession({ endedAt: session.ended_at })
+    /**
+     * A RECONCILIATION THE OPERATOR ASKED TO TAKE OFF THE SHELF.
+     *
+     * Past the window a show is history and the ordinary reason a line is late
+     * is that its stock has already gone — so the default records a price and
+     * moves nothing. When the cases ARE still on the shelf, that default invents
+     * a hand-keyed figure for stock the app can value to the cent and leaves the
+     * count holding cases that were opened on air. See NewStreamItem.fromShelf.
+     *
+     * Only ever true on a reconciliation: inside the window every line already
+     * comes off the shelf, and a flag that meant nothing there would be one
+     * somebody eventually set expecting it to.
+     */
+    const fromShelf = reconcile && input?.fromShelf === true
 
     if (!isLocation(location)) return { ok: false, error: 'Pick a stock location.' }
     const product = db
@@ -1028,12 +1043,25 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
         } price out; the line books the real cost of the stock it takes.`
       }
     }
+    // THE SAME REFUSAL FOR THE SAME REASON, one case later. A reconciliation
+    // told to take its stock off the shelf books what those layers cost, so a
+    // stated price beside it is a second answer to a question already answered —
+    // refused rather than ignored, because a price the operator typed and
+    // watched vanish is worse than one they were told to leave out.
+    if (fromShelf && priceGiven) {
+      return {
+        ok: false,
+        error: `This line is coming off the shelf, so it costs what those cases cost. Leave the ${
+          units ? units.unitType : 'stated'
+        } price out, or switch back to recording a price and leave the count alone.`
+      }
+    }
     // The mirror of that check, for the other input that only makes sense in one
     // mode. A reconciliation consumes no cost layer, so an allocation against it
     // describes layers it is not touching — refused rather than ignored, because
     // a picked allocation silently dropped is a decision the operator watched
     // themselves make and that never happened.
-    if (reconcile && allocation.length > 0) {
+    if (reconcile && !fromShelf && allocation.length > 0) {
       return {
         ok: false,
         error: 'That show is already history, so there are no cost layers left to take this from. Enter what one cost instead.'
@@ -1072,20 +1100,30 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       }
       const unit = units.unitType
       const plural = unit === 'case' ? 'cases' : 'boxes'
-      if (!priceGiven) {
-        return {
-          ok: false,
-          error: `That show is already history, so its stock is long gone and there is nothing left to cost it from. Enter how many ${plural} were broken and what one ${unit} cost.`
+      // THE PRICE IS ONLY DEMANDED WHEN NOTHING IS COMING OFF THE SHELF.
+      //
+      // "Its stock is long gone" is the ordinary case past the window and the
+      // reason a price is the only thing left to cost a line from. It is not the
+      // only case: the cases can still be sitting there, and then the layers
+      // they arrived in already say what they cost. The entry rules below are
+      // unchanged either way — a reconciliation is counted in the product's own
+      // stock unit whichever way it is valued.
+      if (!fromShelf) {
+        if (!priceGiven) {
+          return {
+            ok: false,
+            error: `That show is already history, so its stock is long gone and there is nothing left to cost it from. Enter how many ${plural} were broken and what one ${unit} cost — or take them off the shelf if they are still there.`
+          }
         }
-      }
-      if (!Number.isFinite(statedPrice)) {
-        return {
-          ok: false,
-          error: `Enter what one ${unit} cost, as a number — 2400, not a blank or a word.`
+        if (!Number.isFinite(statedPrice)) {
+          return {
+            ok: false,
+            error: `Enter what one ${unit} cost, as a number — 2400, not a blank or a word.`
+          }
         }
-      }
-      if (statedPrice < 0) {
-        return { ok: false, error: `A ${unit} cannot have cost less than nothing.` }
+        if (statedPrice < 0) {
+          return { ok: false, error: `A ${unit} cannot have cost less than nothing.` }
+        }
       }
       if (unit === 'case' && ((inBoxes ?? 0) > 0 || (inPacks ?? 0) > 0)) {
         return {
@@ -1190,7 +1228,25 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
 
     let costTotal: number
     let slices: LotSlice[] = []
-    if (reconcile) {
+    // THE SHELF HAS TO COVER THE WHOLE LINE, checked here and by the same rule
+    // the form used to decide whether to offer the choice. Partly off the shelf
+    // would book some cases at what they cost and the rest at nothing — a figure
+    // that looks precise and is not, which is the opposite of what somebody
+    // reaching for this wanted.
+    if (fromShelf) {
+      // Read HERE rather than passed in, and read inside the same transaction
+      // the movement runs in: the shelf is a live figure, and a count taken
+      // before the operator finished typing is a count that can have moved.
+      const shelf = db
+        .prepare(
+          'SELECT COALESCE(quantity, 0) AS q FROM inventory_stock WHERE product_id = ? AND location = ?'
+        )
+        .get(productId, location) as { q: number } | undefined
+      const onHand = Number(shelf?.q ?? 0)
+      const cover = shelfCanCover(onHand, qty)
+      if (!cover.ok) return { ok: false, error: cover.reason ?? 'That will not come off the shelf.' }
+    }
+    if (reconcile && !fromShelf) {
       /**
        * NOTHING MOVES, and that is the feature.
        *
@@ -1311,7 +1367,12 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       // this column keeps a name that now only half fits. It is also the switch
       // every reversal reads: a row with a price here moved no stock, so nothing
       // may be handed back for it.
-      stated_case_price: reconcile ? cents(statedPrice) : null,
+      // NULL WHEN IT CAME OFF THE SHELF, and that is load-bearing rather than
+      // tidy: `stated_case_price !== null` is how undo and edit tell a line that
+      // moved stock from one that only recorded a price. A shelf pull moved
+      // stock, so it has to read as one — and there is no stated price on it to
+      // store anyway.
+      stated_case_price: reconcile && !fromShelf ? cents(statedPrice) : null,
       pack_cost: packCostVal,
       loss_value: lossValue,
       note,

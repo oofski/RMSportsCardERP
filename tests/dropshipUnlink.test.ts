@@ -557,5 +557,97 @@ console.log('\n=== WHICH ORDER THE PICKER PUTS FIRST, and what it refuses ===')
   ok(linkPurchaseRefusal(null) === null, 'nothing chosen is not a refusal')
 }
 
+console.log('\n=== reaching a purchase order that is not on the list ===')
+// ---------------------------------------------------------------------------
+/**
+ * "I WANT TO BE ABLE TO ATTACH POs THAT I MAKE TO ANY SO, IF THEY ARE IN
+ * HISTORY OR NOT."
+ *
+ * The SALE was never the problem: the Attach button is on every order that is
+ * not void, whatever stage it reached. The PURCHASE was. The picker's list is
+ * newest-first and capped at sixty, so once sixty orders have been raised
+ * since, an older one is simply not on it — and there was no other route to it
+ * at all.
+ *
+ * SEARCHING IN THE PICKER WOULD NOT HAVE FIXED IT. Filtering the sixty rows
+ * already fetched can only ever find what was already reachable: the same dead
+ * end wearing a text box. The search has to be the query's, which is what is
+ * pinned here.
+ *
+ * LAST IN THE FILE, deliberately. It raises sixty-five orders to bury its
+ * target, which pushes every other fixture off the browsable list — put in the
+ * middle it broke three later assertions that had nothing to do with it.
+ */
+{
+  const buyer = 'Willa Trent'
+  const sale = inv.saveInvoice(
+    {
+      customerName: buyer,
+      invoiceNumber: 'SO-REACH1',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Anything', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  const oldOne = poRepo.createPurchaseOrder(
+    { supplier: 'Hollowbrook Supply', location: 'RM', lines: [] },
+    null
+  )
+  const oldNumber = poRepo.getPurchaseOrder(oldOne.id).poNumber
+
+  // Bury it under more orders than the cap will ever return.
+  for (let i = 0; i < 65; i++) {
+    poRepo.createPurchaseOrder(
+      { supplier: `Filler Distributors ${i}`, location: 'RM', lines: [] },
+      null
+    )
+  }
+
+  ok(
+    !inv.linkablePurchaseOrders(sale.id).some((o: any) => o.poId === oldOne.id),
+    'AN OLDER ORDER FALLS OFF THE BROWSABLE LIST once sixty newer ones exist — which is the whole problem',
+    String(inv.linkablePurchaseOrders(sale.id).length)
+  )
+  ok(
+    inv.linkablePurchaseOrders(sale.id, 60, oldNumber).some((o: any) => o.poId === oldOne.id),
+    'BUT ITS NUMBER STILL FINDS IT — however far back it is',
+    oldNumber
+  )
+  ok(
+    inv.linkablePurchaseOrders(sale.id, 60, 'hollowbrook').some((o: any) => o.poId === oldOne.id),
+    'AND SO DOES ITS SUPPLIER, case-insensitively'
+  )
+  ok(
+    inv.linkablePurchaseOrders(sale.id, 60, 'nothing matches this').length === 0,
+    'a search that matches nothing returns nothing, rather than falling back to the whole list'
+  )
+  /**
+   * AND ONCE FOUND IT CAN ACTUALLY BE ATTACHED. Reaching it is only half the
+   * ask; the point of reaching it is to link it.
+   */
+  const linked = inv.linkDropshipPair(oldOne.id, sale.id, null)
+  ok(linked.ok === true, 'AND AN ORDER FOUND BY SEARCH ATTACHES LIKE ANY OTHER', String(linked.error))
+  ok(
+    inv.getInvoice(sale.id).sourcePoId === oldOne.id,
+    'the sale now names it',
+    String(inv.getInvoice(sale.id).sourcePoId)
+  )
+  /**
+   * A CANCELLED ORDER STAYS OUT — the one exception to "any". It is a purchase
+   * that was withdrawn, so hanging a sale's provenance on it would claim the
+   * goods came from something that never happened.
+   */
+  const scrapped = poRepo.createPurchaseOrder(
+    { supplier: 'Withdrawn Supply Co', location: 'RM', lines: [] },
+    null
+  )
+  poRepo.setPurchaseOrderStatus(scrapped.id, 'cancelled', null)
+  ok(
+    inv.linkablePurchaseOrders(sale.id, 60, 'Withdrawn').length === 0,
+    'AND A CANCELLED ORDER IS NOT OFFERED even when searched for by name'
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

@@ -75,6 +75,53 @@ export function setCursor(value: number): void {
   syncStateSet('cursor', String(value))
 }
 
+/**
+ * Forget everything this machine knows about syncing, and become a new device.
+ *
+ * Called ONCE, on the first boot after a restored database has been swapped
+ * into place. It is the difference between recovering one machine and rolling
+ * the whole company backwards.
+ *
+ * ## Why the outbox must be emptied
+ *
+ * A restored file arrives carrying whatever was queued when the backup was
+ * taken — rows that were already pushed weeks ago, and now would be pushed
+ * again. The relay resolves conflicts LAST-WRITE-WINS on `updated_at`, and
+ * `cloud/worker.js` decides by the value it receives, so re-announcing a
+ * month-old row does not lose politely: it OVERWRITES the current one on every
+ * other machine. One person restoring their own copy would silently undo
+ * everybody else's month.
+ *
+ * ## Why the cursor goes back to zero
+ *
+ * The restored file also carries the cursor from the day it was taken, which
+ * points into a change log that has moved on. Trusting it would skip
+ * everything the relay recorded between the backup and now — the machine would
+ * come back looking healthy and quietly miss a month of other people's work.
+ * Zero means "tell me everything you have", which is slower exactly once and
+ * correct always.
+ *
+ * ## Why the device identity is regenerated
+ *
+ * A device ignores the echo of its own pushes. Restored from a backup, this
+ * machine would recognise its old id on rows it no longer has and skip them —
+ * declining to receive precisely the changes it most needs. A new id makes
+ * every one of them somebody else's news.
+ *
+ * The net effect is the behaviour the owner chose: put this machine back, then
+ * let the relay bring it forward. It cannot damage anyone else's data, because
+ * after this call there is nothing left that says otherwise.
+ */
+export function resetSyncAfterRestore(): { cleared: number } {
+  const db = getDb()
+  const cleared = db.prepare('DELETE FROM sync_outbox').run().changes
+  setCursor(0)
+  // Deleted rather than overwritten so `deviceId()` mints a fresh one on its
+  // next call, in the one place that already knows how.
+  db.prepare(`DELETE FROM sync_state WHERE key = 'device_id'`).run()
+  return { cleared }
+}
+
 export function pendingCount(): number {
   const row = getDb().prepare('SELECT COUNT(*) AS n FROM sync_outbox').get() as { n: number }
   return row.n
@@ -225,6 +272,51 @@ const NEVER_OVERWRITE: Record<string, ReadonlySet<string>> = {
 }
 
 /**
+ * COLUMNS THAT ARE AN OBSERVATION, and merge by WHEN THEY WERE OBSERVED rather
+ * than by who wrote a row last.
+ *
+ * The QuickBooks columns on an invoice are not this app's opinion. They are what
+ * QuickBooks said, at a moment, to the ONE machine that can ask it: the tokens
+ * live in `meta`, sealed with safeStorage, and meta never travels. So the
+ * desktop asks and everybody else receives — and the card says which, "Checked
+ * on the desktop app".
+ *
+ * Under plain last-write-wins that arrangement eats itself. A laptop that has
+ * never spoken to QuickBooks, and never can, still holds a copy of the answer
+ * from whenever it last synced; edit anything on that invoice there — a memo, a
+ * tracking number, an address — and the whole row goes up carrying that frozen
+ * balance, which lands on the desktop and overwrites the reading it took five
+ * minutes ago. The invoice reverts to owing money that was paid, and the only
+ * machine that could correct it is the one that just got corrected.
+ *
+ * Nothing about that is visible. No conflict, no reject, no error: two machines
+ * both wrote a valid row and the later one won. It gets worse the more the team
+ * syncs, which is exactly backwards.
+ *
+ * So these columns move only when the incoming row's observation is NEWER than
+ * the one already here. A row carrying no observation time at all — an older
+ * build, or a machine that has never had an answer — cannot touch them.
+ *
+ * `qbo_status_attempted_at` and `qbo_status_error` are deliberately NOT in the
+ * group: they describe the ATTEMPT, not the answer, and a failed attempt does
+ * not advance the stamp that guards this.
+ */
+const FRESHER_ONLY: Record<string, { stamp: string; cols: ReadonlySet<string> }> = {
+  invoices: {
+    stamp: 'qbo_status_checked_at',
+    cols: new Set([
+      'qbo_status_checked_at',
+      'qbo_balance',
+      'qbo_total_amt',
+      'qbo_voided',
+      'qbo_payments_applied',
+      'qbo_payment_count',
+      'qbo_paid_at'
+    ])
+  }
+}
+
+/**
  * Build the upsert for one incoming row.
  *
  * Only columns this database actually has are used. A laptop on a newer version
@@ -250,12 +342,32 @@ function upsertFor(db: Database, spec: SyncedTable, data: Record<string, unknown
     if (!cols.includes(k)) throw new Error(`missing key column ${k}`)
   }
   const keep = NEVER_OVERWRITE[spec.table]
-  const assignable = cols.filter((c) => !spec.key.includes(c) && !keep?.has(c))
+  const fresh = FRESHER_ONLY[spec.table]
+  // The guard needs the incoming observation time to compare against. A row that
+  // does not carry one cannot be judged fresher, so it does not get to touch the
+  // observation at all — see FRESHER_ONLY.
+  const guarded = fresh && cols.includes(fresh.stamp) ? fresh : null
+  const assignable = cols.filter(
+    (c) =>
+      !spec.key.includes(c) &&
+      !keep?.has(c) &&
+      // Without the stamp, the whole group is held back rather than trusted.
+      !(fresh && !guarded && fresh.cols.has(c))
+  )
+  const t = spec.table
+  const newer =
+    guarded &&
+    `excluded.${guarded.stamp} IS NOT NULL AND ` +
+      `(${t}.${guarded.stamp} IS NULL OR excluded.${guarded.stamp} > ${t}.${guarded.stamp})`
+  const set = (c: string): string =>
+    guarded && guarded.cols.has(c)
+      ? `${c} = CASE WHEN ${newer} THEN excluded.${c} ELSE ${t}.${c} END`
+      : `${c} = excluded.${c}`
   const sql =
     `INSERT INTO ${spec.table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')}) ` +
     `ON CONFLICT (${spec.key.join(', ')}) DO UPDATE SET ` +
     (assignable.length > 0
-      ? assignable.map((c) => `${c} = excluded.${c}`).join(', ')
+      ? assignable.map(set).join(', ')
       : `${spec.key[0]} = excluded.${spec.key[0]}`)
   return { sql, values: cols.map((c) => data[c] ?? null), cols }
 }

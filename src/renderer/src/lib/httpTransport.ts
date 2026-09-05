@@ -1,5 +1,6 @@
 import { BYTES_TAG } from '@shared/ipc'
-import type { UploadedFile } from '@shared/types'
+import type { Result, UploadedFile } from '@shared/types'
+import type { RestoreCheck } from '@shared/restore'
 import type { BridgeTransport } from '../../../bridge'
 
 /**
@@ -359,10 +360,67 @@ async function pickFiles(options: {
   })
 }
 
+/**
+ * Choose a backup and send it to the server as raw bytes.
+ *
+ * NOT through `call()`, and that is the whole reason this exists. Every other
+ * operation in the app is JSON: arguments are serialised into a request body
+ * that the server buffers and parses, capped by RMOPS_MAX_BODY_MB. A database
+ * put through that shape is base64'd — a third larger — and starts being
+ * refused at roughly 35 MB, which a working database reaches on its own as
+ * shipping labels accumulate. The restore would break exactly when the business
+ * is old enough to have something worth restoring.
+ *
+ * So the File is handed to fetch directly. The browser streams it, nothing
+ * holds the whole thing in memory at either end, and the server pipes it
+ * straight to disk. The response is the same RestoreCheck the desktop gets from
+ * its native dialog, so the panel above cannot tell which transport it is on.
+ */
+async function uploadRestore(): Promise<Result<RestoreCheck>> {
+  const file = await new Promise<File | null>((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.db'
+    input.style.position = 'fixed'
+    input.style.left = '-9999px'
+    document.body.appendChild(input)
+    const done = (value: File | null): void => {
+      input.remove()
+      resolve(value)
+    }
+    input.addEventListener('cancel', () => done(null))
+    input.addEventListener('change', () => done(input.files?.[0] ?? null))
+    input.click()
+  })
+
+  if (!file) return { ok: false, error: 'No file chosen.' }
+
+  const res = await fetch('/api/restore', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'content-type': 'application/octet-stream',
+      // The name is a header rather than part of the body, which is entirely
+      // the file. Display only — the server never treats it as a path.
+      'x-rmops-filename': file.name,
+      [REQUEST_HEADER]: '1',
+      [STATION_HEADER]: stationId()
+    },
+    body: file
+  })
+
+  const body = (await res.json().catch(() => null)) as Result<RestoreCheck> | null
+  if (!res.ok) {
+    return { ok: false, error: body?.error ?? `The upload failed (${res.status}).` }
+  }
+  return body ?? { ok: false, error: 'The server gave no answer.' }
+}
+
 export const httpTransport: BridgeTransport = {
   invoke: (channel: string, ...args: unknown[]) => call(channel, args),
   pickFile,
   pickFiles,
+  uploadRestore,
   on: (channel: string, listener: Listener) => {
     const set = listeners.get(channel) ?? new Set<Listener>()
     set.add(listener)

@@ -26,6 +26,15 @@ import {
   type InventorySortRow,
   type SortState
 } from '@shared/inventorySort'
+import { countByPriceBand, matchesPriceBand } from '@shared/priceBands'
+import {
+  formatSpreadPercent,
+  spreadPercent,
+  spreadPercentText,
+  spreadTone
+} from '@shared/spread'
+import { SortTh } from '../../components/SortTh'
+import { PriceBandChips } from '../../components/PriceBandChips'
 import { countIdentifierGaps } from '@shared/identifiers'
 import { destinationSummary } from '@shared/purchaseOrders'
 import { receivableProgressOf } from '@shared/receiving'
@@ -50,6 +59,7 @@ import {
   receivableOutstanding
 } from '../invoicing/helpers'
 import { DeliveryPanel } from '../invoicing/DeliveryPanel'
+import { StockCheckPanel } from './StockCheckPanel'
 
 type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
 type Detail =
@@ -220,9 +230,19 @@ export function InventoryOverview({
           onClick={() => openDetail({ kind: 'value', label: 'Inventory value' })}
         />
         <Stat icon="Wallet" value={formatMoney(stats.totalCost, { compact: true })} label="Total cost" onClick={() => openDetail({ kind: 'cost', label: 'Total cost' })} />
+        {/* THE PERCENTAGE RIDES ON THE SPREAD TILE — asked for as "% gain/loss
+            next to spread ... as a total number on that screen", and explicitly
+            not as a tile of its own. `unit` is the small slot beside the figure
+            that Cases on hand already uses for its noun, so it inherits the
+            tile's pos/neg colour and the two halves of one fact stay one fact.
+
+            Against TOTAL COST, which is the cost basis the spread is measured
+            from. Uncosted boxes contribute nothing to either side (see
+            InventoryStats.spread), so they cannot flatter or dent this. */}
         <Stat
           icon="TrendingUp"
           value={formatMoney(stats.spread, { compact: true })}
+          unit={spreadPercentText(stats.spread, stats.totalCost) ?? undefined}
           label="Spread"
           tone={stats.spread < 0 ? 'neg' : stats.spread > 0 ? 'pos' : undefined}
           onClick={() => openDetail({ kind: 'spread', label: 'Spread' })}
@@ -333,6 +353,15 @@ export function InventoryOverview({
 
       <div className="panel-row">
         <div className="panel-card">
+          {/* THE HEADER IS THE TITLE AND THE MONEY, AND NOTHING ELSE.
+              The shelf breakdown used to live in the right-hand column beside
+              the total, as one run-on string of every location whether it held
+              anything or not: "RM 487.7501 · AM 2 · California Roadshow 0 ·
+              Kentucky Roadshow 0 · New York Roadshow 0 · Texas Roadshow 0
+              units". Four empty shops took two lines, which squeezed the column
+              until the title itself wrapped mid-phrase. The information was
+              real; the shape was wrong. It moves to its own row below, where it
+              has the full width and nothing to fight with. */}
           <div className="panel-head">
             <div>
               <h3>Inventory value by category</h3>
@@ -340,11 +369,9 @@ export function InventoryOverview({
             </div>
             <div className="ph-right">
               <div className="ph-total">{formatMoney(stats.totalValue, { compact: true })}</div>
-              <div className="ph-sub">
-                {LOCATIONS.map((l) => `${l.label} ${stats.unitsByLocation[l.id] ?? 0}`).join(' · ')} units
-              </div>
             </div>
           </div>
+          <ShelfUnitStrip unitsByLocation={stats.unitsByLocation} />
           {valueByCategory.length === 0 ? (
             <div className="chart-empty">
               <Icon name="BarChart3" size={26} />
@@ -377,6 +404,11 @@ export function InventoryOverview({
           loading={incomingLoading}
         />
       </div>
+
+      {/* Under Incoming, ABOVE the category breakdown. This is a question about
+          whether the numbers below can be trusted, so it belongs before them
+          rather than at the bottom of the page where nobody scrolls. */}
+      <StockCheckPanel />
 
       <div className="section-head">
         <div>
@@ -581,7 +613,19 @@ function ZeroCostBanner({
       ...s,
       [id]: { saved: String(cost), state: worked ? 'fixed' : 'stuck' }
     }))
-    if (worked) toast.success(`${res.data.product.name} is now carried at cost.`)
+    // SAY WHAT ELSE MOVED. Pricing from here now carries the figure back to the
+    // purchase order the stock arrived on — the thing that used to be left at
+    // $0.00 with nothing said about it — so the message names the order rather
+    // than leaving the operator to go and check.
+    if (worked) {
+      const p = res.data.ordersPriced
+      const orders = p && p.poNumbers.length > 0 ? ` ${p.poNumbers.join(', ')} now priced.` : ''
+      const sales =
+        p && p.salesRestated > 0
+          ? ` Cost of goods corrected on ${p.salesRestated} sale line${p.salesRestated === 1 ? '' : 's'} already sold from it.`
+          : ''
+      toast.success(`${res.data.product.name} is now carried at cost.${orders}${sales}`)
+    }
     await onChanged()
   }
 
@@ -1058,6 +1102,60 @@ function IncomingPanel({
 }
 
 /**
+ * Where the units actually are, one chip per shelf that holds something.
+ *
+ * ## Two things that made the old line unreadable
+ *
+ * EMPTY SHELVES WERE PRINTED. Every location appeared whether or not it held a
+ * unit, so four roadshow shops sitting at zero — the ordinary state between
+ * shows — took up more of the line than the two shelves with stock on them. A
+ * shop with nothing in it is not news; the count is only interesting where
+ * there is a count. They are still accounted for, as a quiet "+4 empty", so the
+ * list cannot be mistaken for the whole set of shelves.
+ *
+ * AND THE NUMBERS WERE RAW FLOATS. "RM 487.7501" is what a sum of fractional
+ * box quantities looks like before anybody rounds it, and it reads as a broken
+ * number rather than a precise one. Fractions are legal here — a giveaway
+ * product legitimately sits at 9.75 boxes — so this rounds to two places and
+ * then drops trailing zeros, which prints a whole number as a whole number and
+ * keeps the fraction where there is one.
+ */
+function ShelfUnitStrip({
+  unitsByLocation
+}: {
+  unitsByLocation: Record<string, number>
+}): JSX.Element | null {
+  const held = LOCATIONS.map((l) => ({ label: l.label, units: Number(unitsByLocation[l.id]) || 0 }))
+  const withStock = held.filter((h) => h.units > 0)
+  const empty = held.length - withStock.length
+  if (held.length === 0) return null
+
+  // Two decimals, then trailing zeros dropped: 488 stays 488, 487.7501 becomes
+  // 487.75, and 9.50 becomes 9.5.
+  const tidy = (n: number): string => String(Math.round(n * 100) / 100)
+
+  return (
+    <div className="shelf-strip">
+      {withStock.length === 0 ? (
+        <span className="shelf-strip-none">Nothing on any shelf yet</span>
+      ) : (
+        withStock.map((h) => (
+          <span className="shelf-chip" key={h.label}>
+            <span className="shelf-chip-name">{h.label}</span>
+            <span className="shelf-chip-n mono">{tidy(h.units)}</span>
+          </span>
+        ))
+      )}
+      {empty > 0 && (
+        <span className="shelf-strip-empty" title="Shelves holding nothing right now">
+          +{empty} empty
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
  * One purchase order shown as a shipping-box container in the Incoming panel:
  * the PO number + its live stage tag, a supplier/destination/units summary, and
  * (expanded) the products inside. Display-only — receiving into stock happens at
@@ -1149,8 +1247,19 @@ function PurchaseOrderBox({
                     <CategoryLogo category={l.category} size={16} />
                   )}
                 </span>
-                <span className="po-ship-name" title={l.productName}>
-                  {l.productName}
+                {/* The SKU under the name, for the same reason it is under the
+                    name on the counting form and on the receipt: these names
+                    agree for their first forty characters and this column cuts
+                    them off, so "2026 Topps Chrome Baseball Jumbo Hobby 8-Box…"
+                    and "2026 Topps Chrome Baseball Delight 6-Box Case" arrive on
+                    screen as the same words. The SKU is what is printed on the
+                    carton, and it is the only field here that tells two boxes
+                    apart at a glance. The full name stays on the title. */}
+                <span className="po-ship-id">
+                  <span className="po-ship-name" title={l.productName}>
+                    {l.productName}
+                  </span>
+                  {l.sku && <span className="po-ship-sku mono">{l.sku}</span>}
                 </span>
                 {/* A wholly drop-shipped line stays on the list — the box has to
                     account for every line on the order or its counts look like a
@@ -1421,65 +1530,9 @@ function sortRowOf({ p, m }: { p: InventoryProduct; m: ProductMetrics }): Invent
     invValue: p.quantity > 0 ? m.invValue : null,
     avgCost: m.hasCost ? m.avgCost : null,
     totalCost: m.hasCost && p.quantity > 0 ? m.totalCost : null,
-    spread: m.hasCost && !m.outsideSpread && p.quantity > 0 ? m.spread : null
+    spread: m.hasCost && !m.outsideSpread && p.quantity > 0 ? m.spread : null,
+    spreadPct: m.hasCost && !m.outsideSpread && p.quantity > 0 ? m.spreadPct : null
   }
-}
-
-/**
- * A column header you can rank the table by.
- *
- * The arrow is always drawn, faint until the column is the one in use, because
- * an arrow that only appears on hover is a feature nobody finds. The whole
- * header is the button, so the target is the width of the column rather than a
- * 13px glyph.
- */
-function SortTh({
-  label,
-  sortKey,
-  sort,
-  onSort,
-  align = 'left'
-}: {
-  label: string
-  sortKey: string
-  sort: SortState
-  onSort: (key: string) => void
-  align?: 'left' | 'center' | 'right'
-}): JSX.Element {
-  const active = sort.key === sortKey
-  const dir = active ? sort.dir : null
-  const arrow = (
-    <Icon
-      name={dir === 'asc' ? 'ChevronUp' : dir === 'desc' ? 'ChevronDown' : 'ChevronsUpDown'}
-      size={13}
-      className="sort-arrow"
-    />
-  )
-  return (
-    <th
-      className={`sort-th sort-${align}${active ? ' sorted' : ''}`}
-      aria-sort={dir === 'asc' ? 'ascending' : dir === 'desc' ? 'descending' : 'none'}
-    >
-      <button
-        type="button"
-        className="sort-btn"
-        onClick={() => onSort(sortKey)}
-        title={
-          active
-            ? `Sorted by ${label}, ${dir === 'asc' ? 'lowest' : 'highest'} first — click to reverse`
-            : `Sort by ${label}`
-        }
-      >
-        {/* THE ARROW LEADS ON A MONEY COLUMN. Trailing it would push the
-            heading left by its own width and the heading would stop lining up
-            with the right-aligned figures under it — the same complaint the PO
-            card headers drew, one column over. */}
-        {align === 'right' && arrow}
-        <span className="sort-label">{label}</span>
-        {align !== 'right' && arrow}
-      </button>
-    </th>
-  )
 }
 
 function InventoryDetail({
@@ -1499,6 +1552,7 @@ function InventoryDetail({
   const [hover, setHover] = useState<{ data: ProductCardData; style: CSSProperties } | null>(null)
   const closeTimer = useRef<number | undefined>(undefined)
   const [sort, setSort] = useState<SortState>(() => defaultInventorySort(detail.kind))
+  const [band, setBand] = useState<string | null>(null)
 
   // A new drill-down arrives sorted by the figure ITS tile counts — see
   // defaultInventorySort. Carrying the previous view's column across would
@@ -1582,7 +1636,22 @@ function InventoryDetail({
     }
   }, [rows, detail])
 
-  const shown = useMemo(() => sortInventoryRows(filtered, sort, sortRowOf), [filtered, sort])
+  /**
+   * The band counts come off the drill-down's own list, BEFORE the band is
+   * applied, so a chip says how many rows a click would land on from inside
+   * whichever tile was opened. Counting the whole catalog here would promise
+   * products this table is not showing.
+   */
+  const bandCounts = useMemo(
+    () => countByPriceBand(filtered, (x) => (x.m.hasBid ? x.m.marketUnit : null)),
+    [filtered]
+  )
+  const banded = useMemo(
+    () => filtered.filter((x) => matchesPriceBand(x.m.hasBid ? x.m.marketUnit : null, band)),
+    [filtered, band]
+  )
+
+  const shown = useMemo(() => sortInventoryRows(banded, sort, sortRowOf), [banded, sort])
 
   const onSort = useCallback((key: string) => {
     setSort((cur) => nextSortState(cur, key))
@@ -1632,7 +1701,14 @@ function InventoryDetail({
       { key: 'invValue', label: 'Inv. value', align: 'right' },
       { key: 'avgCost', label: 'Avg cost', align: 'right' },
       { key: 'totalCost', label: 'Total cost', align: 'right' },
-      { key: 'spread', label: 'Spread', align: 'right' }
+      { key: 'spread', label: 'Spread', align: 'right' },
+      // ITS OWN COLUMN RATHER THAN A SECOND LINE IN THE SPREAD CELL, and the
+      // reason is the arrow on the header: ranking by dollars ranks by how much
+      // of a product is held as much as by how well it was bought — "gain/loss
+      // could be huge on something but to contextualize it sometimes its a ton
+      // of that product" — so the two are different questions and each needs to
+      // be sortable on its own. It is the narrowest money column on the table.
+      { key: 'spreadPct', label: 'Spread %', align: 'right' }
     ],
     []
   )
@@ -1686,8 +1762,16 @@ function InventoryDetail({
         </div>
       </div>
 
+      {/* Outside the empty-state branch, so a band that filters everything away
+          still leaves its own chip on screen to click back off. */}
+      <PriceBandChips value={band} counts={bandCounts} onChange={setBand} label="Market value" />
+
       {shown.length === 0 ? (
-        <EmptyState icon="Boxes" title="Nothing to show here yet" />
+        <EmptyState
+          icon="Boxes"
+          title={band ? 'Nothing in that range' : 'Nothing to show here yet'}
+          message={band ? 'Click the chip again to clear the price filter.' : undefined}
+        />
       ) : (
         <>
           {/* The phone's version of the column headers. The stacked card layout
@@ -1785,6 +1869,18 @@ function InventoryDetail({
                   >
                     {m.hasCost && !m.outsideSpread && p.quantity > 0 ? formatMoney(m.spread) : dash}
                   </td>
+                  {/* The same row's spread against what it cost. Dashed on
+                      exactly the rows the column beside it dashes — see
+                      productMetrics, where spreadPct is nulled by the same two
+                      conditions, so the pair can never disagree. */}
+                  <td
+                    className={`money ${spreadTone(m.spreadPct) ?? ''}`}
+                    data-label="Spread %"
+                  >
+                    {(m.hasCost && !m.outsideSpread && p.quantity > 0
+                      ? formatSpreadPercent(m.spreadPct)
+                      : null) ?? dash}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1810,6 +1906,16 @@ function InventoryDetail({
                   data-label="Spread"
                 >
                   {formatMoney(totals.spread)}
+                </td>
+                {/* THE WHOLE SCREEN'S RETURN, against the cost in the column two
+                    to the left — not an average of the row percentages, which
+                    would weight a single $40 box the same as a $200,000 position
+                    and answer a question nobody asked. */}
+                <td
+                  className={`money ${spreadTone(spreadPercent(totals.spread, totals.cost)) ?? ''}`}
+                  data-label="Spread %"
+                >
+                  {spreadPercentText(totals.spread, totals.cost) ?? dash}
                 </td>
               </tr>
             </tfoot>

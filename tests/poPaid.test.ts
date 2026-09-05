@@ -598,38 +598,335 @@ ok(
 ok(stockAt('RM') === tpBefore, 'and the stock went back', `${tpBefore} -> ${stockAt('RM')}`)
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 13. the card offers the undo (guards that outlive this suite) ===')
+console.log('\n=== 13. PART-PAYMENT: a PO can be paid a bit at a time ===')
 // ---------------------------------------------------------------------------
 /**
- * READ OFF THE SOURCE. `setPurchaseOrderPaid` has taken a boolean and logged
- * "Payment un-marked" since it was written — and NOTHING REACHED IT, because the
- * card hid the button the moment `paidAt` was set. A backend that can undo and a
- * screen with no way to ask is the same as no undo at all, and no test of the
- * repository could see it.
+ * The owner: "sometimes we pay part of a PO."
+ *
+ * `paid_at` used to be the whole story — one stamp meaning the money has gone —
+ * so an order half wired had to be recorded as fully paid or not paid at all,
+ * and both are false. Payments are rows now and the stamp is DERIVED from them.
+ *
+ * What that derivation has to get right, and how each fails if it does not:
+ *
+ *   A. A PART PAYMENT DOES NOT STAMP. If it did, every screen reading `paidAt`
+ *      would call a half-paid order settled — including the P&L tiles, which
+ *      count paid by that fact.
+ *   B. THE LAST ONE DOES. Three wires covering the total is a paid order; if the
+ *      stamp only came from the button, the same money paid in pieces would sit
+ *      unpaid for ever.
+ *   C. REMOVING ONE TAKES IT BACK OFF. This is the undo, and it is finer than
+ *      the toggle it replaced: on an order settled by three wires it can drop
+ *      the one entered twice, which a whole-order toggle could not.
+ *   D. NOTHING IS DOUBLE-BOOKED. Payments are not COGS. The cost was booked when
+ *      the order was raised and paying it must not touch the money book again.
+ */
+const partial = make() // 4 x 25 = 100
+ok(po.getPurchaseOrder(partial.id).amountPaid === 0, 'a new order has paid nothing', String(po.getPurchaseOrder(partial.id).amountPaid))
+ok(po.getPurchaseOrder(partial.id).total === 100, 'and comes to 100')
+
+const p1 = po.addPoPayment(partial.id, 30, 'Wire one', ACTOR)
+ok(!p1.error, 'thirty dollars is recorded', String(p1.error))
+const afterP1 = po.getPurchaseOrder(partial.id)
+ok(afterP1.amountPaid === 30, 'A: the order reports 30 paid', String(afterP1.amountPaid))
+ok(afterP1.paidAt === null, 'A: AND IS NOT STAMPED PAID — 30 of 100 is not settled', String(afterP1.paidAt))
+ok(poColumnOf(afterP1) === 'ordered', 'A: so the card stays where it was', poColumnOf(afterP1))
+ok(cogsFor(partial.id) === 100, 'D: and the money book is untouched', String(cogsFor(partial.id)))
+
+const p2 = po.addPoPayment(partial.id, 45, null, ACTOR)
+ok(!p2.error, 'a second payment of 45 is recorded', String(p2.error))
+ok(po.getPurchaseOrder(partial.id).amountPaid === 75, 'the two add up', String(po.getPurchaseOrder(partial.id).amountPaid))
+ok(po.getPurchaseOrder(partial.id).paidAt === null, 'and 75 of 100 is still not settled')
+
+// B. The one that closes it.
+const p3 = po.addPoPayment(partial.id, 25, 'Balance', ACTOR)
+ok(!p3.error, 'the last 25 is recorded', String(p3.error))
+const settled = po.getPurchaseOrder(partial.id)
+ok(settled.amountPaid === 100, 'B: 30 + 45 + 25 = 100', String(settled.amountPaid))
+ok(!!settled.paidAt, 'B: AND THE STAMP FALLS OUT OF THE PAYMENTS — nothing pressed a button')
+ok(poColumnOf(settled) === 'paid', 'B: so the card draws in Paid', poColumnOf(settled))
+ok(cogsFor(partial.id) === 100, 'D: with the money book STILL untouched', String(cogsFor(partial.id)))
+ok(
+  (db.prepare('SELECT COUNT(*) AS n FROM finance_cogs WHERE po_id = ?').get(partial.id) as { n: number }).n === 1,
+  'D: and exactly one COGS row for the order, not one per payment'
+)
+
+const rows = po.listPoPayments(db, partial.id)
+ok(rows.length === 3, 'all three payments are on the record', String(rows.length))
+ok(rows[0].amount === 30 && rows[2].amount === 25, 'oldest first — the order they were sent in')
+ok(rows[0].note === 'Wire one' && rows[1].note === null, 'each keeping its own note')
+
+// C. The undo.
+const dropped = po.removePoPayment(rows[1].id, ACTOR)
+ok(!dropped.error, 'C: the middle payment can be removed', String(dropped.error))
+const afterDrop = po.getPurchaseOrder(partial.id)
+ok(afterDrop.amountPaid === 55, 'C: leaving 30 + 25', String(afterDrop.amountPaid))
+ok(afterDrop.paidAt === null, 'C: AND THE STAMP IS TAKEN BACK — it no longer covers the total', String(afterDrop.paidAt))
+ok(po.listPoPayments(db, partial.id).length === 2, 'C: with two rows left', String(po.listPoPayments(db, partial.id).length))
+ok(cogsFor(partial.id) === 100, 'C: and still no effect on the money book')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 14. what a payment refuses ===')
+// ---------------------------------------------------------------------------
+/**
+ * Each of these would otherwise be believed by every screen that reads the
+ * balance, and none of them can be spotted afterwards from the figure alone.
+ */
+const bad = make() // 100
+ok(!!po.addPoPayment(bad.id, 0, null, ACTOR).error, 'zero is refused — a row saying money moved and naming none')
+ok(!!po.addPoPayment(bad.id, -20, null, ACTOR).error, 'a negative is refused — a supplier credit is an ADJUSTMENT, not a payment')
+ok(!!po.addPoPayment(bad.id, NaN, null, ACTOR).error, 'and a half-typed amount is refused')
+ok(po.getPurchaseOrder(bad.id).amountPaid === 0, 'none of which wrote anything', String(po.getPurchaseOrder(bad.id).amountPaid))
+
+const over = po.addPoPayment(bad.id, 150, null, ACTOR)
+ok(!!over.error, 'MORE THAN IS OUTSTANDING IS REFUSED — 150 against a 100 order')
+ok(
+  /adjustment/i.test(String(over.error)),
+  'and the refusal names where that difference honestly goes',
+  String(over.error)
+)
+ok(po.getPurchaseOrder(bad.id).amountPaid === 0, 'with nothing written', String(po.getPurchaseOrder(bad.id).amountPaid))
+// The boundary, both sides of it.
+ok(!po.addPoPayment(bad.id, 100, null, ACTOR).error, 'exactly the outstanding amount is fine')
+ok(!!po.getPurchaseOrder(bad.id).paidAt, 'and settles it')
+ok(!!po.addPoPayment(bad.id, 1, null, ACTOR).error, 'a further dollar on a settled order is refused')
+
+const deadPay = make()
+po.setPurchaseOrderStatus(deadPay.id, 'cancelled', ACTOR)
+const deadRes = po.addPoPayment(deadPay.id, 10, null, ACTOR)
+ok(!!deadRes.error, 'a CANCELLED order refuses a payment — its money is already out of COGS')
+ok(po.getPurchaseOrder(deadPay.id).amountPaid === 0, 'and nothing was written', String(po.getPurchaseOrder(deadPay.id).amountPaid))
+ok(!!po.removePoPayment('no-such-payment', ACTOR).error, 'removing a payment that is gone is refused')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 15. ONE writer of paid_at, across all three doors ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE BUG THIS SECTION EXISTS TO CATCH, and it is the one that would ship.
+ *
+ * `paid_at` is written from three places: the pay dialog, the "mark paid"
+ * toggle, and dragging a card into the Paid column. The first writes payment
+ * rows. If either of the others stamps the date WITHOUT writing one, the board
+ * calls the order paid and the dialog — which counts rows — says the whole total
+ * is still outstanding, and the first thing it offers is paying it a second
+ * time. Nothing on screen contradicts anything; the two answers simply live on
+ * different screens.
+ *
+ * So each door is opened here and the rows behind it are counted.
+ */
+const doorA = make() // the toggle
+po.setPurchaseOrderPaid(doorA.id, true, ACTOR)
+const a = po.getPurchaseOrder(doorA.id)
+ok(!!a.paidAt, 'DOOR 1 the toggle stamps the date')
+ok(a.amountPaid === 100, 'AND LEAVES THE PAYMENT THAT SAYS SO — the whole outstanding total', String(a.amountPaid))
+ok(po.listPoPayments(db, doorA.id).length === 1, 'as exactly one row', String(po.listPoPayments(db, doorA.id).length))
+
+const doorB = make() // the stage move
+po.setPurchaseOrderStatus(doorB.id, 'paid', ACTOR)
+const b = po.getPurchaseOrder(doorB.id)
+ok(!!b.paidAt, 'DOOR 2 dragging the card into Paid stamps the date')
+ok(b.amountPaid === 100, 'AND LEAVES A PAYMENT TOO', String(b.amountPaid))
+
+// The interesting case: half wired, THEN somebody presses the button.
+const doorC = make()
+po.addPoPayment(doorC.id, 40, 'Deposit', ACTOR)
+po.setPurchaseOrderPaid(doorC.id, true, ACTOR)
+const c = po.getPurchaseOrder(doorC.id)
+ok(c.amountPaid === 100, 'MARK PAID ON A HALF-WIRED ORDER SENDS THE REST — 40 + 60', String(c.amountPaid))
+ok(po.listPoPayments(db, doorC.id).length === 2, 'as a second row, leaving the deposit alone', String(po.listPoPayments(db, doorC.id).length))
+ok(po.listPoPayments(db, doorC.id)[0].note === 'Deposit', 'with its own note intact')
+ok(!!c.paidAt, 'and the order is settled')
+
+// Un-marking takes the payments with it, because the only orders that reach
+// there are settled ones — a part-paid order has no stamp to take back.
+po.setPurchaseOrderPaid(doorC.id, false, ACTOR)
+const cBack = po.getPurchaseOrder(doorC.id)
+ok(cBack.paidAt === null, 'UN-MARKING clears the stamp')
+ok(cBack.amountPaid === 0, 'AND THE PAYMENTS GO WITH IT — the two halves of one fact cannot disagree', String(cBack.amountPaid))
+ok(cogsFor(doorC.id) === 100, 'and the money book is untouched by any of it', String(cogsFor(doorC.id)))
+
+// Un-cancelling clears the stamp, so it must clear the rows. Undoing a RECEIPT
+// keeps the stamp, so it must keep them.
+const doorD = make()
+po.setPurchaseOrderPaid(doorD.id, true, ACTOR)
+po.setPurchaseOrderStatus(doorD.id, 'cancelled', ACTOR)
+po.setPurchaseOrderStatus(doorD.id, 'ordered', ACTOR)
+const d = po.getPurchaseOrder(doorD.id)
+ok(d.paidAt === null, 'REOPENING A CANCELLED ORDER clears the stamp')
+ok(d.amountPaid === 0, 'AND THE PAYMENTS WITH IT', String(d.amountPaid))
+
+const doorE = make()
+po.setPurchaseOrderPaid(doorE.id, true, ACTOR)
+po.setPurchaseOrderStatus(doorE.id, 'received', ACTOR)
+po.setPurchaseOrderStatus(doorE.id, 'ordered', ACTOR)
+const eBack = po.getPurchaseOrder(doorE.id)
+ok(!!eBack.paidAt, 'UNDOING A RECEIPT keeps the stamp — boxes arriving by mistake says nothing about the invoice')
+ok(eBack.amountPaid === 100, 'AND KEEPS THE PAYMENTS', String(eBack.amountPaid))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 16. the balance arithmetic, and its cent of slack ===')
+// ---------------------------------------------------------------------------
+/* eslint-disable @typescript-eslint/no-var-requires */
+const { poBalance } = require('../src/shared/orderActions')
+{
+  const none = poBalance(100, [])
+  ok(none.outstanding === 100 && !none.settled && !none.partly, 'nothing paid: all outstanding, not partly')
+  const some = poBalance(100, [{ amount: 30 }, { amount: 20 }])
+  ok(some.paid === 50 && some.outstanding === 50, 'two payments sum', `${some.paid}/${some.outstanding}`)
+  ok(some.partly && !some.settled, 'and read as partly paid')
+  const all = poBalance(100, [{ amount: 100 }])
+  ok(all.settled && !all.partly && all.outstanding === 0, 'covered: settled, nothing outstanding')
+
+  /**
+   * THE CENT. A total is restated from lines, freight and adjustments that each
+   * round, so an order can land a cent away from the payments meant to settle
+   * it. Without the slack that order is unpayable for ever: the only thing that
+   * would close it is a one-cent payment no bank statement will ever show.
+   */
+  const slack = poBalance(100.01, [{ amount: 100 }])
+  ok(slack.settled, 'a cent short still counts as settled')
+  ok(slack.outstanding === 0, 'and reports nothing outstanding rather than a cent', String(slack.outstanding))
+  const twoCents = poBalance(100.02, [{ amount: 100 }])
+  ok(!twoCents.settled, 'TWO cents short does not — the slack is a rounding allowance, not a discount')
+
+  // Overpayment cannot happen through addPoPayment, but a total EDITED DOWN
+  // after the money went can produce one, and a negative "outstanding" would be
+  // printed on a button offering to pay it.
+  const overpaid = poBalance(50, [{ amount: 80 }])
+  ok(overpaid.settled && overpaid.outstanding === 0, 'an over-covered order floors at zero, never negative', String(overpaid.outstanding))
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 17. the dialog is reachable, and says the balance ===')
+// ---------------------------------------------------------------------------
+/**
+ * READ OFF THE SOURCE, for the reason the section this replaced existed: the
+ * backend could undo a payment for months and nothing reached it, because the
+ * card hid the button. A capability with no way to ask for it is no capability,
+ * and no test of the repository can see that.
  */
 const { readFileSync } = require('node:fs')
 const boardSrc = readFileSync('src/renderer/src/modules/invoicing/PurchaseOrderBoard.tsx', 'utf8')
 const moduleSrc = readFileSync('src/renderer/src/modules/invoicing/InvoicingModule.tsx', 'utf8')
+/**
+ * ANCHORED TO THE END OF THE STATEMENT, and the loose version of this line
+ * survived the mutation that reintroduces the original bug. Appending
+ * `&& !po.paidAt` hides the button again the moment an order is settled — which
+ * is exactly the trap this suite was written for — and a regex that stops at
+ * `'cancelled'` matches the broken line as happily as the correct one.
+ */
 ok(
-  /const payable = onMarkPaid !== undefined && po\.status !== 'cancelled'/.test(boardSrc),
-  'THE PAY BUTTON IS NO LONGER HIDDEN ONCE PAID — that is what made a mis-tick unfixable'
+  /const payable = onPay !== undefined && po\.status !== 'cancelled'\s*\n/.test(boardSrc),
+  'THE PAY BUTTON IS SHOWN WHATEVER THE BALANCE — hiding it once paid is what made a mis-tick unfixable'
 )
 ok(
-  /po\.paidAt \? 'Un-mark paid' : 'Mark paid'/.test(boardSrc),
-  'and it says which way it goes'
+  !/const payable =[^\n]*paidAt/.test(boardSrc),
+  'AND NOTHING IN THAT CONDITION LOOKS AT paidAt — that is the shape of the old bug'
 )
 ok(
-  /onMarkPaid\?\.\(po\.id, po\.poNumber, !po\.paidAt\)/.test(boardSrc),
-  'passing the opposite of what the card currently claims'
+  /onClick=\{\(\) => onPay\?\.\(po\.id\)\}/.test(boardSrc),
+  'AND IT OPENS THE DIALOG rather than toggling a boolean — a toggle cannot record half'
 )
 ok(
-  /api\.purchaseOrders\.setPaid\(id, paid\)/.test(moduleSrc),
-  'AND THE HANDLER PASSES IT THROUGH — it used to hardcode true, so the false case was unreachable'
+  /bal\.partly \? `Pay — \$\{formatMoney\(bal\.outstanding\)\} left`/.test(boardSrc),
+  'the button says what is LEFT on a part-paid order, not "Mark paid"'
+)
+ok(
+  /<PayPoModal/.test(boardSrc) && /function PayPoModal\(/.test(boardSrc),
+  'the dialog exists and is rendered'
+)
+ok(
+  /api\.purchaseOrders\.addPayment\(po\.id, value, note\.trim\(\) \|\| null\)/.test(boardSrc),
+  'it writes through addPayment'
+)
+ok(
+  /api\.purchaseOrders\.removePayment\(payment\.id\)/.test(boardSrc),
+  'and offers the undo per payment'
+)
+ok(
+  /onReload=\{canManage \? reload : undefined\}/.test(moduleSrc),
+  'AND IT IS GATED ON MANAGE — no Pay button for somebody the write would refuse'
 )
 ok(
   /po\.status === 'received' && to === 'ordered' \? 'Undo receipt'/.test(boardSrc),
-  'undoing a receipt is called that, not "Reopen" — from Received it is a different act with different consequences'
+  'undoing a receipt is still called that, not "Reopen" — a different act with different consequences'
 )
+
+// The receipt has its OWN pay button, and it reads the same balance. Left
+// saying "Mark paid" it would tell somebody looking at a half-wired order that
+// nothing had been sent — on the very document that lists what the order cost.
+const receiptSrc = readFileSync('src/renderer/src/modules/invoicing/PurchaseOrderReceipt.tsx', 'utf8')
+ok(
+  /const receiptBalance = poBalance\(detail\.total, detail\.payments \?\? \[\]\)/.test(receiptSrc),
+  'THE RECEIPT READS THE SAME BALANCE — one arithmetic, not a second copy'
+)
+ok(
+  /receiptBalance\.partly \? `Pay the rest — \$\{formatMoney\(receiptBalance\.outstanding\)\}`/.test(receiptSrc),
+  'and its button says what is left rather than "Mark paid" on a part-paid order'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 18. orders paid before payments existed still read as paid ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE MIGRATION, and without it the feature is worse than not shipping it.
+ *
+ * An order settled last March carries a stamp and no payment rows. The balance
+ * is read from the rows now, so that order would say its whole total is
+ * outstanding — and the dialog's first offer would be to pay it again.
+ *
+ * v98 backfills one row per already-paid order, for its own total, dated the
+ * stamp it already carries. Simulated here by doing to a row exactly what the
+ * old code did — stamp the date, write no payment — and then re-running the
+ * migration's statement.
+ */
+const legacy = make() // 100, unpaid
+db.prepare("UPDATE purchase_orders SET paid_at = '2026-03-04T00:00:00.000Z' WHERE id = ?").run(legacy.id)
+ok(po.getPurchaseOrder(legacy.id).amountPaid === 0, 'the old shape: stamped, with no payment behind it')
+
+/**
+ * THE MIGRATION'S OWN SQL, LIFTED OUT OF THE MIGRATION.
+ *
+ * Retyping it here would test a copy: deleting the backfill from database.ts
+ * would leave this suite green and every already-paid order reading unpaid in
+ * the app. So the statement is read from the source and executed, which means
+ * the assertions below fail the moment it is removed or changed.
+ */
+const dbSrc = readFileSync('src/main/db/database.ts', 'utf8')
+const backfillAt = dbSrc.indexOf("INSERT INTO purchase_order_payments (id, po_id, amount, note, created_by, created_at)")
+ok(backfillAt > -1, 'THE v98 BACKFILL IS IN THE MIGRATION — not only in this test')
+const BACKFILL = dbSrc.slice(backfillAt, dbSrc.indexOf(';', backfillAt) + 1)
+ok(
+  /purchase_orders o/.test(BACKFILL) && /NOT EXISTS/.test(BACKFILL),
+  'and it is the statement this section then runs',
+  BACKFILL.slice(0, 80)
+)
+
+db.exec(BACKFILL)
+const fixed = po.getPurchaseOrder(legacy.id)
+ok(fixed.amountPaid === 100, 'AFTER THE BACKFILL it reports its total paid', String(fixed.amountPaid))
+ok(fixed.paidAt === '2026-03-04T00:00:00.000Z', 'with the original date untouched — the backfill invents no history', String(fixed.paidAt))
+const legacyRows = po.listPoPayments(db, legacy.id)
+ok(legacyRows.length === 1, 'as one row', String(legacyRows.length))
+ok(legacyRows[0].createdAt === '2026-03-04T00:00:00.000Z', 'dated the day it was marked, not today', legacyRows[0].createdAt)
+ok(/before payments were recorded/.test(String(legacyRows[0].note)), 'and saying plainly where it came from', String(legacyRows[0].note))
+
+// IDEMPOTENT, because migrations run on every boot.
+const beforeAgain = (db.prepare('SELECT COUNT(*) AS n FROM purchase_order_payments').get() as { n: number }).n
+db.exec(BACKFILL)
+ok(
+  (db.prepare('SELECT COUNT(*) AS n FROM purchase_order_payments').get() as { n: number }).n === beforeAgain,
+  'RUNNING IT AGAIN DOUBLES NOTHING — the guard is the order having no payments at all',
+  String((db.prepare('SELECT COUNT(*) AS n FROM purchase_order_payments').get() as { n: number }).n)
+)
+// And it must not resurrect a payment the operator deliberately removed: doing
+// so clears the stamp in the same transaction, which takes the row out of the
+// backfill's reach for ever.
+ok(
+  po.removePoPayment(legacyRows[0].id, ACTOR).error === undefined,
+  'the backfilled row can be removed like any other'
+)
+ok(po.getPurchaseOrder(legacy.id).paidAt === null, 'which clears the stamp — so the backfill can never see it again')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

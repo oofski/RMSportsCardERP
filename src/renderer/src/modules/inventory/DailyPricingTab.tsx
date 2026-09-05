@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { PricingRow } from '@shared/types'
+import type { InventorySortRow, SortState } from '@shared/inventorySort'
+import { nextSortState, sortInventoryRows } from '@shared/inventorySort'
+import { countByPriceBand, matchesPriceBand } from '@shared/priceBands'
+import { formatSpreadPercent, spreadPercent, spreadPercentText, spreadTone } from '@shared/spread'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Icon } from '../../components/Icon'
+import { SortTh } from '../../components/SortTh'
+import { PriceBandChips } from '../../components/PriceBandChips'
 import { CenterLoader, EmptyState } from '../../components/ui'
 import { formatDate, formatMoney, formatUnitMoney } from '../../lib/format'
 import { ProductQuickView } from './ProductCases'
@@ -18,6 +24,17 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
   const [rows, setRows] = useState<PricingRow[] | null>(null)
   const [query, setQuery] = useState('')
   const [quick, setQuick] = useState<PricingRow | null>(null)
+  const [band, setBand] = useState<string | null>(null)
+  /**
+   * Opens on SPREAD, biggest first.
+   *
+   * A pricing screen sorted by name is a list; sorted by spread it is a
+   * worklist — the boxes furthest from what they cost are the ones a morning
+   * price update is for. The arrow starts lit on that column so the header
+   * says why the rows are in this order, rather than the table looking
+   * unsorted while quietly being sorted.
+   */
+  const [sort, setSort] = useState<SortState>({ key: 'spread', dir: 'desc' })
 
   const load = useCallback(async () => {
     setRows(await api.inventory.pricingList())
@@ -27,7 +44,15 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
     load()
   }, [load])
 
-  const filtered = useMemo(() => {
+  /**
+   * The text filter alone, kept separate from the band filter on purpose.
+   *
+   * The chip COUNTS are taken from this list — what the search has narrowed,
+   * before any band is applied — so each chip says how many rows a click would
+   * land on from where the operator is standing. Counting after the band would
+   * make every unselected chip read zero, which is both useless and wrong.
+   */
+  const searched = useMemo(() => {
     const q = query.trim().toLowerCase()
     const list = rows ?? []
     if (!q) return list
@@ -35,6 +60,39 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
       q.split(/\s+/).every((t) => `${r.name} ${r.sku} ${r.category}`.toLowerCase().includes(t))
     )
   }, [rows, query])
+
+  const bandCounts = useMemo(() => countByPriceBand(searched, (r) => r.highBid), [searched])
+
+  const filtered = useMemo(
+    () => searched.filter((r) => matchesPriceBand(r.highBid, band)),
+    [searched, band]
+  )
+
+  /**
+   * What each column ranks by, read off the same values the cells print.
+   *
+   * A cell showing a dash yields null here, so a column can never sort by
+   * something the operator cannot see — the rule the shared contract is built
+   * on. `outsideSpread` is the case that matters: those rows print "—" in the
+   * Spread column because no cost was ever recorded, so they must sort as
+   * missing rather than as a very good or very bad zero.
+   */
+  const sortRowOf = (r: PricingRow): InventorySortRow => ({
+    name: r.name,
+    unit: r.unitType ?? '',
+    quantity: r.quantity,
+    byLocation: {},
+    highBid: r.highBid,
+    invValue: r.invValue,
+    avgCost: r.unitCost > 0 ? r.unitCost : null,
+    totalCost: r.costValue > 0 ? r.costValue : null,
+    spread: r.outsideSpread ? null : r.spread,
+    spreadPct: r.outsideSpread ? null : spreadPercent(r.spread, r.costValue),
+    lastPriced: r.highBidAt
+  })
+
+  const shown = useMemo(() => sortInventoryRows(filtered, sort, sortRowOf), [filtered, sort])
+  const onSort = (key: string): void => setSort((cur) => nextSortState(cur, key))
 
   // `outside` is the money the Spread beside it is not speaking for — boxes with
   // no cost basis, which the dashboard excludes for the same reason. Carried in
@@ -46,13 +104,18 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
         (acc, r) => {
           acc.value += r.invValue
           acc.spread += r.spread
+          // The denominator for the header percentage. Summed alongside the
+          // spread it qualifies rather than derived afterwards, so a row that is
+          // outside the spread is outside the basis too and the two halves of
+          // the ratio always describe the same set of products.
+          if (!r.outsideSpread) acc.cost += r.costValue
           if (r.outsideSpread) {
             acc.outside += r.invValue
             acc.outsideCount += 1
           }
           return acc
         },
-        { value: 0, spread: 0, outside: 0, outsideCount: 0 }
+        { value: 0, spread: 0, cost: 0, outside: 0, outsideCount: 0 }
       ),
     [filtered]
   )
@@ -114,6 +177,12 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
               Value <strong>{formatMoney(totals.value, { compact: true })}</strong> · Spread{' '}
               <strong className={totals.spread < 0 ? 'neg' : totals.spread > 0 ? 'pos' : ''}>
                 {formatMoney(totals.spread, { compact: true })}
+                {spreadPercentText(totals.spread, totals.cost) && (
+                  <span className="pricing-tot-pct">
+                    {' '}
+                    {spreadPercentText(totals.spread, totals.cost)}
+                  </span>
+                )}
               </strong>
               {totals.outsideCount > 0 && (
                 <span>
@@ -136,24 +205,44 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
         </div>
       </div>
 
-      {filtered.length === 0 ? (
-        <EmptyState icon="DollarSign" title="Nothing to price" message="Only products with stock on hand appear here." />
+      {/* Under the head rather than inside it: the chips are a question about
+          the LIST, and the head is about the page. Drawn even when a band has
+          filtered everything away, so the way back is never behind an empty
+          state. */}
+      <PriceBandChips value={band} counts={bandCounts} onChange={setBand} label="Market value" />
+
+      {shown.length === 0 ? (
+        <EmptyState
+          icon="DollarSign"
+          title={band ? 'Nothing in that range' : 'Nothing to price'}
+          message={
+            band
+              ? 'No product on hand has a market value in that band. Click the chip again to clear it.'
+              : 'Only products with stock on hand appear here.'
+          }
+        />
       ) : (
         <div className="table-wrap">
           <table className="data pricing-table">
             <thead>
+              {/* THE SAME CONTROL THE ON-HAND TABLE USES, not one that looks
+                  like it — see components/SortTh. The owner asked for the sort
+                  buttons "like it is added on the inventory on hand page", and
+                  two headers that sort differently would be worse than one
+                  that sorts imperfectly. */}
               <tr>
-                <th>Product</th>
-                <th style={{ textAlign: 'center' }}>On hand</th>
-                <th style={{ textAlign: 'right' }}>Avg cost</th>
-                <th style={{ textAlign: 'right' }}>High bid</th>
-                <th style={{ textAlign: 'right' }}>Inv. value</th>
-                <th style={{ textAlign: 'right' }}>Spread</th>
-                <th style={{ textAlign: 'right' }}>Last priced</th>
+                <SortTh label="Product" sortKey="product" sort={sort} onSort={onSort} />
+                <SortTh label="On hand" sortKey="total" sort={sort} onSort={onSort} align="center" />
+                <SortTh label="Avg cost" sortKey="avgCost" sort={sort} onSort={onSort} align="right" />
+                <SortTh label="High bid" sortKey="highBid" sort={sort} onSort={onSort} align="right" />
+                <SortTh label="Inv. value" sortKey="invValue" sort={sort} onSort={onSort} align="right" />
+                <SortTh label="Spread" sortKey="spread" sort={sort} onSort={onSort} align="right" />
+                <SortTh label="Spread %" sortKey="spreadPct" sort={sort} onSort={onSort} align="right" />
+                <SortTh label="Last priced" sortKey="lastPriced" sort={sort} onSort={onSort} align="right" />
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r) => (
+              {shown.map((r) => (
                 <tr key={r.id}>
                   <td>
                     <button className="pricing-name" onClick={() => setQuick(r)} title="View cases">
@@ -178,6 +267,15 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
                     title={r.outsideSpread ? 'No cost recorded — this stock is outside the spread.' : undefined}
                   >
                     {r.outsideSpread ? <span className="muted">—</span> : formatMoney(r.spread)}
+                  </td>
+                  {/* How the product is DOING, beside how much of it is held.
+                      Dashed on exactly the rows the column before it dashes. */}
+                  <td className={`money ${r.outsideSpread ? '' : spreadTone(spreadPercent(r.spread, r.costValue)) ?? ''}`}>
+                    {(r.outsideSpread
+                      ? null
+                      : formatSpreadPercent(spreadPercent(r.spread, r.costValue))) ?? (
+                      <span className="muted">—</span>
+                    )}
                   </td>
                   <td className="money" style={{ color: 'var(--text-3)' }}>{r.highBidAt ? formatDate(r.highBidAt) : '—'}</td>
                 </tr>

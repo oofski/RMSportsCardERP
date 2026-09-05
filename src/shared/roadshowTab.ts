@@ -306,3 +306,142 @@ export function roadshowShopNamed(name: string | null | undefined): string | nul
   const v = String(name ?? '').trim().toLowerCase()
   return ROADSHOW_SHOPS.find((s) => s.toLowerCase() === v) ?? null
 }
+
+/**
+ * WHY A SHOP'S COLUMN IS EMPTY WHEN ITS TAB PLAINLY IS NOT.
+ *
+ * The owner, looking at New York: 0 units, "Nothing here yet", and directly
+ * underneath it "PO-0452 · $0.00 · 1 unpriced". His words: "why is the roadshow
+ * tab not showing the product ... that doesn't make sense."
+ *
+ * ## Both halves of that card were telling the truth
+ *
+ * The column reads the SHELF and the footer reads the TAB, deliberately — see
+ * the note at the top of RoadshowBoard for why, and it is the right split. A
+ * case bought at a shop and sold out of it the same afternoon leaves the shelf
+ * at zero and stays on the week's tab for ever, which is exactly the shape a
+ * roadshow produces: writing the sale short at a shop BUYS the case onto the tab
+ * and consumes it in the same transaction (see buyShortAtShop), so a product can
+ * be bought, sold and gone without ever having been seen standing there.
+ *
+ * ## So the bug was the SENTENCE, and it was a real one
+ *
+ * "Nothing here yet. Add what you buy and it lands on this shelf straight away"
+ * asserts that nothing was ever added. When a tab is running, that is false, and
+ * it is false in the one direction that costs money: it invites somebody to add
+ * the case a second time. What is true is that nothing is standing there NOW,
+ * and the tab says where it went.
+ *
+ * ## The unpriced count stops being decoration
+ *
+ * A line still price-pending means its cases are carried at nothing, and if any
+ * have gone out that sale was costed at nothing too. Pricing it later fixes
+ * both — `setPurchaseOrderLinePrice` re-costs the stock AND the sales already
+ * drawn from it, which is precisely what makes a tab safe to sell out of — but
+ * only if somebody does it, so it is said in full rather than left as two words
+ * in the footer.
+ *
+ * THAT WARNING BELONGS TO THE TAB, NOT TO AN EMPTY SHELF, and it was wired to
+ * the wrong one. It shipped inside the empty-column branch, so a shop still
+ * holding its cases said nothing at all — and that is the shop where it matters
+ * most, because those cases are on the shelf at a cost of zero and every screen
+ * that values stock is reading that zero. The owner, looking at California
+ * holding four unpriced cases in silence beside two empty shops shouting about
+ * one each: "why can not everything is showing like that, it should be the
+ * same." Quite. `unpricedTabWarning` is separate from the headline for exactly
+ * that reason — one answers "why is this empty", the other "what does this
+ * week still owe a number", and only the first is about emptiness.
+ */
+export interface ShopTabStanding {
+  /** The tab's own number, so the sentence can point at something findable. */
+  poNumber: string
+  /** Σ(line quantity) on the tab — everything bought from this shop this week. */
+  orderedUnits: number
+  /**
+   * Units actually checked in. At a shop that is every unit STAYING there, taken
+   * the moment it was typed; units routed home are on a lorry and are not.
+   */
+  receivedUnits: number
+  /** Lines still waiting for a price. */
+  pendingPriceCount: number
+}
+
+const NOTHING_YET =
+  'Nothing here yet. Add what you buy and it lands on this shelf straight away.'
+
+const whole = (v: unknown): number => {
+  const n = Math.round(Number(v))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+const units = (n: number): string => `${n} unit${n === 1 ? '' : 's'}`
+
+/**
+ * The sentence for a shop holding nothing, given the week's tab.
+ *
+ * A tab with nothing on it is still "nothing here yet" — the week has been
+ * opened and not yet bought against, which is the same state to the person
+ * looking at the column and should not read as a different one.
+ */
+export function emptyShelfHeadline(tab: ShopTabStanding | null): string {
+  const ordered = whole(tab?.orderedUnits)
+  if (!tab || ordered <= 0) return NOTHING_YET
+
+  // Capped at what was ordered: the two figures come from the same order, but a
+  // count that read "4 sold and −1 coming" would be worse than merely wrong.
+  const landed = Math.min(ordered, whole(tab.receivedUnits))
+  const coming = ordered - landed
+
+  const said: string[] = []
+  if (landed > 0) {
+    said.push(`the ${units(landed)} bought here ${landed === 1 ? 'has' : 'have'} been sold`)
+  }
+  if (coming > 0) {
+    said.push(
+      `${landed > 0 ? `${units(coming)} more ${coming === 1 ? 'is' : 'are'}` : `the ${units(coming)} on it ${coming === 1 ? 'is' : 'are'}`} coming home rather than staying at the shop`
+    )
+  }
+
+  return `Nothing is standing here now — ${said.join(', and ')}. It is all on ${tab.poNumber}.`
+}
+
+/**
+ * STOCK STANDING HERE THAT NOBODY HAS PRICED — the one thing a shop board can
+ * still prevent.
+ *
+ * ## It used to shout about sold cases too, and that was the wrong half
+ *
+ * The warning was keyed on the TAB's unpriced line count, so a shop whose only
+ * case had been bought and sold in one afternoon got four lines of warning about
+ * a case that was gone. The owner: "can you like not do the warnings for
+ * anything that was sold, but rather let me click on it if it was sold and then
+ * it tells me which PO and SO it was attached to."
+ *
+ * That is the right split, and not merely a quieter one. An unpriced case that
+ * has SOLD is money already spent and a sale already booked; the board cannot
+ * undo either, and the screen that reports it is Wholesale, which holds those
+ * rows out of its margin totals and names the tab to go and price. What a shop
+ * board CAN prevent is the next wrong sale — and that is only ever about stock
+ * still on the shelf. So the warning counts units standing here at no price, and
+ * where a sold case went is answered by clicking it.
+ *
+ * ## Units, not lines
+ *
+ * A line of six that has sold five leaves ONE unpriced unit standing, and a line
+ * count cannot say so — it would report the whole line as a problem long after
+ * most of it stopped being one. `unpricedHere` comes off the layers, which is
+ * what is actually there.
+ */
+export function unpricedTabWarning(
+  tab: ShopTabStanding | null,
+  unpricedUnitsHere: number
+): string | null {
+  const units = whole(unpricedUnitsHere)
+  if (!tab || units <= 0) return null
+  const one = units === 1
+  return (
+    `${units} ${one ? 'unit' : 'units'} standing here ${one ? 'has' : 'have'} no price on ` +
+    `${tab.poNumber} yet, so ${one ? 'it is' : 'they are'} carried at nothing. ` +
+    `Fill the price in on the tab before ${one ? 'it is' : 'they are'} sold.`
+  )
+}

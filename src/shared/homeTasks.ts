@@ -201,13 +201,31 @@ export function validateRecurring(input: {
  * A fortnight of work has a beginning, an end, a day the run happens and a day
  * the money lands, and they are FOUR different days:
  *
- *     work        Sun 02 Aug  →  Sat 15 Aug     (14 days)
- *     run on      Wed 19 Aug                    (end + 4)
- *     paid on     Fri 21 Aug                    (end + 6)
+ *     work        Mon 03 Aug  →  Sun 16 Aug     (14 days)
+ *     run on      Wed 19 Aug                    (end + 3)
+ *     paid on     Fri 21 Aug                    (end + 5)
  *
- *     next        Sun 16 Aug  →  Sat 29 Aug
+ *     next        Mon 17 Aug  →  Sun 30 Aug
  *     run on      Wed 02 Sep
  *     paid on     Fri 04 Sep
+ *
+ * ## The fortnight moved one day, and the paydays did not
+ *
+ * The owner: "the payroll dates need to be shifted one day back, so really
+ * payroll is the 17th through the 30th, and then the 31st through next." The
+ * fortnight used to open on a Sunday and close on a Saturday — the 16th to the
+ * 29th — and the floor's own week does not actually break there.
+ *
+ * So the ANCHOR moved forward a day and the two LAGS shrank by one, which are
+ * the same edit seen from opposite ends: the period slid a day later, and the
+ * run and the payment stayed exactly where they were. Wednesday is still the
+ * run and Friday is still payday.
+ *
+ * Moving the anchor alone would have been the smaller diff and the wrong
+ * change. The lags are measured from the period's END, so a period closing a
+ * day later would have dragged the run to a Thursday and the money to a
+ * SATURDAY — a payday on a weekend, arrived at silently, off a request that
+ * only ever mentioned which days people are being paid FOR.
  *
  * This used to collapse the run and the payment into one field and put the
  * period boundary on the run date, so a period read as "05/08 → 19/08, paid the
@@ -219,27 +237,75 @@ export function validateRecurring(input: {
  *
  * ## Why the lag is measured from `end`
  *
- * Because that is what the lag IS — the office needs four days after the
- * timesheet closes to approve it, and the bank needs two more to move the money.
+ * Because that is what the lag IS — the office needs the first few days after
+ * the timesheet closes to approve it, and the bank needs two more to move the
+ * money.
  * Measured from `start` the same two numbers would be 17 and 19, which are
  * arithmetic rather than reasons, and would silently need changing if the
  * fortnight ever became something else.
  */
-export const PAYROLL_ANCHOR = '2026-08-02'
+export const PAYROLL_ANCHOR = '2026-08-03'
 export const PAYROLL_EVERY_DAYS = 14
-/** Days after the period ENDS that payroll is run. Saturday close → Wednesday run. */
-export const PAYROLL_RUN_LAG_DAYS = 4
-/** Days after the period ENDS that the money lands. Saturday close → Friday pay. */
-export const PAYROLL_PAY_LAG_DAYS = 6
+/** Days after the period ENDS that payroll is run. Sunday close → Wednesday run. */
+export const PAYROLL_RUN_LAG_DAYS = 3
+/** Days after the period ENDS that the money lands. Sunday close → Friday pay. */
+export const PAYROLL_PAY_LAG_DAYS = 5
+
+/**
+ * THE WEEKDAYS THE FORTNIGHT OPENS AND CLOSES ON, DERIVED — never typed.
+ *
+ * The My Hours screen explained the schedule in words: "a period is 14 days of
+ * work, Sunday to Saturday ... so a fortnight ending on a Saturday is run that
+ * Wednesday". Every one of those weekday names was TRUE when it was written and
+ * FALSE the moment the anchor moved forward a day, and nothing failed — the
+ * dates on the same screen were right while the sentence beside them described a
+ * different fortnight. A second source of truth about the same fact always ends
+ * this way; the only question is how long before somebody reads the wrong half.
+ *
+ * So the sentence now asks the anchor. These cannot disagree with the schedule
+ * because they ARE the schedule.
+ *
+ * Parsed at UTC noon like every other date-only value here: local midnight
+ * shifted across a daylight-saving boundary lands on 23:00 the previous day and
+ * would name the wrong weekday twice a year.
+ */
+const WEEKDAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday'
+] as const
+
+export function weekdayName(day: string): string {
+  const t = Date.parse(`${day}T12:00:00Z`)
+  if (!Number.isFinite(t)) return ''
+  return WEEKDAYS[new Date(t).getUTCDay()]
+}
+
+/** The weekday a fortnight opens on, e.g. "Monday". */
+export const PAYROLL_OPENS_ON = weekdayName(PAYROLL_ANCHOR)
+/** The weekday a fortnight closes on, e.g. "Sunday". */
+export const PAYROLL_CLOSES_ON = weekdayName(addDays(PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS - 1))
+/** The weekday payroll is run on. */
+export const PAYROLL_RUN_WEEKDAY = weekdayName(
+  addDays(PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS - 1 + PAYROLL_RUN_LAG_DAYS)
+)
+/** The weekday the money lands. */
+export const PAYROLL_PAY_WEEKDAY = weekdayName(
+  addDays(PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS - 1 + PAYROLL_PAY_LAG_DAYS)
+)
 
 export interface PayrollPeriod {
-  /** First day of work in the period, inclusive. A Sunday. */
+  /** First day of work in the period, inclusive. A Monday. */
   start: string
-  /** Last day of work in the period, inclusive. A Saturday. */
+  /** Last day of work in the period, inclusive. A Sunday. */
   end: string
-  /** The day payroll is RUN for this period — four days after it closes. */
+  /** The day payroll is RUN for this period — three days after it closes. */
   runOn: string
-  /** The day the money lands — six days after it closes, two after the run. */
+  /** The day the money lands — five days after it closes, two after the run. */
   paidOn: string
   /** True for the period the given day falls inside. */
   current: boolean

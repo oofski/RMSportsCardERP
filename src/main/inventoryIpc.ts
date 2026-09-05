@@ -21,8 +21,11 @@ import type {
   ResetRunSummary
 } from '@shared/inventoryReset'
 import type { StockProvenance } from '@shared/provenance'
-import { productProvenance, shopBuys } from './db/provenance'
-import type { ProductAvailability, ShopBuy, StockAtLocationRow } from '@shared/availability'
+import { productProvenance, shopBuys,
+  shopShelf,
+  shopSales
+} from './db/provenance'
+import type { ProductAvailability, ShopBuy, StockAtLocationRow, ShopShelfRow, ShopSale } from '@shared/availability'
 import { productAvailability, stockAtLocation } from './db/inventory'
 import type { Consignment, NewConsignment } from '@shared/consignment'
 import {
@@ -31,6 +34,7 @@ import {
   sendOnConsignment,
   settleConsignment
 } from './db/consignment'
+import type { StockMoveRequest } from '@shared/stockMove'
 import type {
   AddStockInput,
   AdjustStockInput,
@@ -79,6 +83,7 @@ import {
   addProductImage,
   addStock,
   adjustStock,
+  moveStock,
   categorySummaries,
   createProduct,
   deleteProduct,
@@ -103,6 +108,8 @@ import {
   upcExists
 } from './db/inventory'
 import { addIncoming, cancelIncoming, listIncoming, receiveIncoming } from './db/incoming'
+import { auditStock } from './db/stockAudit'
+import type { StockAudit } from '@shared/stockAudit'
 import { commitScan, listScans, logScanMiss, resolveScan, undoScan } from './db/scanning'
 import type { ResetApplyInput, ResetPreview, ResetPreviewInput } from './db/inventoryReset'
 import {
@@ -125,6 +132,7 @@ import {
   deleteSupplyOrder,
   listSupplies,
   listSupplyOrders,
+  listSupplyOrderHistory,
   purchaseSupply,
   setSupplyImage,
   setSupplyOrderStatus,
@@ -262,6 +270,13 @@ export function registerInventoryIpc(): void {
   ipcMain.handle(IPC.invIncomingList, (): IncomingShipment[] =>
     can('module.inventory') ? listIncoming() : []
   )
+  // READS ONLY. The audit names what disagrees; the repairs are the buttons that
+  // already exist on the orders and the shelves. See @shared/stockAudit.
+  ipcMain.handle(IPC.invStockAudit, (): StockAudit =>
+    can('module.inventory')
+      ? auditStock()
+      : { findings: [], ordersChecked: 0, shelvesChecked: 0, checkedAt: new Date().toISOString() }
+  )
   ipcMain.handle(IPC.invPricingList, (): PricingRow[] =>
     can('module.inventory') ? pricingList() : []
   )
@@ -303,6 +318,25 @@ export function registerInventoryIpc(): void {
     if (!can('module.inventory')) return []
     return stockAtLocation(String(location ?? ''))
   })
+
+  /**
+   * WHAT A SHOP HANDED OVER AND WHAT BECAME OF IT — bought, here, sold.
+   *
+   * A read, gated like every other inventory read. Bare array on the empty case,
+   * matching stockAtLocation beside it.
+   */
+  ipcMain.handle(IPC.invShopShelf, (_e, location: unknown): ShopShelfRow[] =>
+    can('module.inventory') ? shopShelf(String(location ?? '')) : []
+  )
+
+  /** Where this product went from this shop. See shopSales. */
+  ipcMain.handle(
+    IPC.invShopSales,
+    (_e, payload: { location?: string; productId?: string }): ShopSale[] =>
+      can('module.inventory')
+        ? shopSales(String(payload?.location ?? ''), String(payload?.productId ?? ''))
+        : []
+  )
 
   ipcMain.handle(IPC.invProductAvailability, (_e, productId: string): ProductAvailability => {
     if (!can('module.inventory') && !can('module.invoicing')) {
@@ -678,6 +712,37 @@ export function registerInventoryIpc(): void {
     }
   })
 
+  /**
+   * CARRY UNITS TO ANOTHER SHELF. See moveStock, and @shared/stockMove for why
+   * this is neither a re-route nor a pair of adjustments.
+   *
+   * Both shelves are checked against the registry, not just the destination: a
+   * move OFF a name that is not a place could only ever be a move off nothing,
+   * and the honest answer is to say so rather than to silently succeed at
+   * changing no stock.
+   */
+  ipcMain.handle(IPC.invStockMove, (_e, input: StockMoveRequest): Result<InventoryProduct> => {
+    try {
+      const actor = requireManage()
+      if (!input?.productId) return { ok: false, error: 'Select a product.' }
+      if (!isLocation(input?.from)) return { ok: false, error: 'Choose where these are coming from.' }
+      if (!isLocation(input?.to)) return { ok: false, error: 'Choose where these are going.' }
+      const res = moveStock(
+        {
+          productId: String(input.productId),
+          from: String(input.from),
+          to: String(input.to),
+          quantity: Number(input.quantity),
+          note: input.note ?? null
+        },
+        actor.id
+      )
+      return res.error ? { ok: false, error: res.error } : { ok: true, data: res.product as InventoryProduct }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
   ipcMain.handle(
     IPC.invImageAdd,
     async (e, productId: string, upload?: UploadedFile): Promise<Result<ProductImage[]>> => {
@@ -1028,6 +1093,12 @@ export function registerInventoryIpc(): void {
   // ---- Supply orders (Ordered → In-transit → Delivered) -------------------
   ipcMain.handle(IPC.supplyOrdersList, (): SupplyOrder[] =>
     can('module.inventory') ? listSupplyOrders() : []
+  )
+
+  // What has fallen off the board. Read-only, and gated on the same permission
+  // as the board itself: it is the same orders, one day older.
+  ipcMain.handle(IPC.supplyOrderHistory, (): SupplyOrder[] =>
+    can('module.inventory') ? listSupplyOrderHistory() : []
   )
 
   ipcMain.handle(IPC.supplyOrderCreate, (_e, input: NewSupplyOrder): Result<SupplyOrder> => {

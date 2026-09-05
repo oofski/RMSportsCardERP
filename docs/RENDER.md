@@ -69,7 +69,29 @@ gives you at your registrar. The certificate is automatic.
 ## Backups — do this before you trust it
 
 Render backs up disks on paid plans, but the safe copy is the one you can
-restore without asking anybody. Open a Shell from the service page:
+restore without asking anybody.
+
+**Sign in as the Owner and open Admin → Backup → Download backup.** It shows
+what is in the database right now — products, orders, timesheets, ledger rows —
+and hands you one `.db` file. That is the whole business in a single file, and
+it is the procedure to use, because it is the only one anybody will actually
+follow at the moment it is needed.
+
+Two things about that file:
+
+- **It is secret.** The QuickBooks connection and the payment instructions are
+  in it in readable form. Keep it where you would keep a password, not in a
+  shared folder.
+- **Photos are not in it.** Product images live beside the database, not inside
+  it. Everything else is.
+
+Keep the copies somewhere that is not Render. A backup on the same disk as the
+thing it is backing up is not a backup.
+
+### If the app will not start
+
+Then there is no Admin screen to click, and this is the fallback. Open a Shell
+from the service page:
 
 ```bash
 node -e "
@@ -78,11 +100,55 @@ node -e "
 "
 ```
 
-`VACUUM INTO` is safe on a live database. Copying the `.db` file while people
-are using it is not — that is how you get a backup that restores into a corrupt
-database months later.
+This is the same operation the button performs. `VACUUM INTO` is safe on a live
+database; copying the `.db` file while people are using it is not — WAL means
+the `.db` file alone is not the whole database, which is how you get a backup
+that restores into a corrupt database months later.
 
-Download it from the Shell, and keep the copies somewhere that is not Render.
+Download it from the Shell.
+
+### Putting one back
+
+**Admin → Backup → Restore a backup.** Choose the file. Before anything is
+touched the app checks it and shows you what is in it beside what is on the
+machine now — including what you would lose — and you type RESTORE to confirm.
+The app then restarts and swaps the file during startup, which is the only
+moment nothing has the database open.
+
+Four things it does that a hand-typed `mv` does not:
+
+- **Your current database is kept**, renamed `rm-operations-replaced-<stamp>.db`
+  beside the live one. A restore you regret is itself undoable.
+- **A backup from a NEWER version is refused.** Loading one into an older build
+  runs the migrations backwards and then pushes broken rows to everybody through
+  the relay. Update the app first, then restore.
+- **Damaged and unrelated files are refused** before anything moves, by an
+  integrity check that reads every page. A half-finished download opens fine and
+  falls apart weeks later.
+- **It does not roll the team back.** After the swap this machine forgets its
+  sync history and catches up from the relay, so the restored rows are never
+  pushed at anyone else. That is deliberate: the relay resolves conflicts
+  last-write-wins, so a month-old backup allowed to push would overwrite
+  everybody's current work. Restore fixes YOUR copy.
+
+On Render the restart is automatic — the process ends and the platform starts it
+again. Nothing to click.
+
+### If the app will not start at all
+
+Then there is no screen to restore from either. From the Shell:
+
+```bash
+# Stop writing first, then put the file in place.
+mv /data/rm-operations.db /data/rm-operations-old.db
+mv /data/your-backup.db  /data/rm-operations.db
+rm -f /data/rm-operations.db-wal /data/rm-operations.db-shm
+```
+
+Deleting the `-wal` and `-shm` is not optional. They belong to the database you
+just moved aside, and SQLite finding a write-ahead log from a *different*
+database will replay it into the new one — which is how a restore becomes
+corruption. Restart the service afterwards.
 
 ## Updating
 

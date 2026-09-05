@@ -50,6 +50,7 @@ const {
 const { assertStockLotsConsistent, unitMoney } = require('../src/main/db/lots')
 const { layerGaps, shelfBasis } = require('../src/main/db/valuation')
 const { previewReset, buildResetExport, resetCatalog } = require('../src/main/db/inventoryReset')
+const { saveStockLocation } = require('../src/main/db/stockLocations')
 const { getOwnerBoard } = require('../src/main/db/ownerDashboard')
 const { productMetrics } = require('../src/renderer/src/modules/inventory/helpers')
 
@@ -802,6 +803,102 @@ ok(
 )
 assertStockLotsConsistent(db)
 ok(true, 'the stock/lot invariant survived the re-basing')
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. uncosted ROADSHOW stock is not a job on the banner ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, on the zero-cost warnings the inventory catalog was throwing at
+ * him: "if something is from the roadshow and doesn't have the price it does not
+ * need to have anything weird in there ... it can just be shown as 0 and shown
+ * to be in roadshow, it doesn't need that notification."
+ *
+ * He is right, and the reason is what the list IS. A roadshow week buys and
+ * sells against itself for days before anybody knows what a case cost — that is
+ * the whole point of a tab, and `setPurchaseOrderLinePrice` exists to settle it
+ * later. Carrying that stock at zero meanwhile is the ORDINARY state of a shop
+ * that is still trading, not a number somebody forgot. The banner is a work
+ * queue whose fix is "put the real cost on the product", and a queue permanently
+ * full of rows nobody should act on stops being read — taking the genuinely
+ * wrong ones down with it.
+ *
+ * WHAT MUST NOT CHANGE IS THE ARITHMETIC. `totalValue − totalCost = spread +
+ * outsideSpreadValue` is exact across three tiles, and filtering one side of it
+ * would make them stop reconciling — the precise failure `outsideSpreadValue`
+ * was added to prevent. So the money goes on being counted and only the LIST
+ * stops naming it, which is why every case below asserts the identity again.
+ */
+const RS_SHOP = 'Roadshow Ashford'
+saveStockLocation({ label: RS_SHOP }, null)
+const before13 = inventoryStats()
+
+const RS_BOX = make({ name: 'VAL Shop Uncosted Box', category: 'Hockey', cost: 0, bid: 250, qty: 0 })
+addStock(RS_BOX, RS_SHOP, 3, 0, 'bought at the shop, price still to come', null)
+const s13 = inventoryStats()
+ok(
+  !s13.zeroCost.some((z: any) => z.id === RS_BOX),
+  'THE ASK: three uncosted boxes standing only at a shop are not on the banner'
+)
+ok(
+  eq(s13.outsideSpreadValue - before13.outsideSpreadValue, 3 * 250),
+  'AND THE MONEY IS STILL HELD OUT OF THE SPREAD — the tile counts what the list no longer names',
+  String(s13.outsideSpreadValue - before13.outsideSpreadValue)
+)
+ok(
+  s13.outsideSpreadCount === before13.outsideSpreadCount + 1,
+  'counted among the products it is holding out, too'
+)
+ok(
+  eq(s13.totalValue - s13.totalCost, s13.spread + s13.outsideSpreadValue),
+  'value − cost still reconciles exactly to spread + held out, which is the whole reason the tile was not filtered',
+  `${s13.totalValue - s13.totalCost} vs ${s13.spread + s13.outsideSpreadValue}`
+)
+
+const RS_CASE = make({ name: 'VAL Shop Uncosted Case', category: 'Hockey', cost: 0, bid: 3000, qty: 0, unit: 'case' })
+addStock(RS_CASE, RS_SHOP, 1, 0, 'a case at the shop, unpriced', null)
+const s13c = inventoryStats()
+ok(
+  !s13c.zeroCost.some((z: any) => z.id === RS_CASE),
+  'a CASE at the shop is left alone for the same reason — it is the commonest thing a roadshow sells'
+)
+ok(
+  eq(s13c.spread - s13.spread, 3000),
+  'and it goes on booking its whole market value as spread, exactly as an uncosted case always has',
+  String(s13c.spread - s13.spread)
+)
+ok(
+  eq(s13c.totalValue - s13c.totalCost, s13c.spread + s13c.outsideSpreadValue),
+  'the identity holds over that one too'
+)
+
+// -- THE BOUNDARY: stock in the building is still a job ----------------------
+// Not "does the product touch a roadshow" but "is there uncosted stock anywhere
+// somebody can walk up to". A case carried home unpriced is exactly what the
+// banner is for, and a product that is ALSO at a shop must not smuggle it out.
+addStock(RS_BOX, 'RM', 1, 0, 'and one came home still unpriced', null)
+const s13m = inventoryStats()
+ok(
+  s13m.zeroCost.some((z: any) => z.id === RS_BOX),
+  'THE SAME PRODUCT IS BACK ON THE LIST the moment one of them is standing at RM — the shop is the exemption, not the product'
+)
+ok(
+  eq(s13m.totalValue - s13m.totalCost, s13m.spread + s13m.outsideSpreadValue),
+  'and the identity is unmoved by any of it'
+)
+
+updateProduct({ id: RS_BOX, unitCost: 120 })
+const s13f = inventoryStats()
+ok(
+  !s13f.zeroCost.some((z: any) => z.id === RS_BOX),
+  'pricing it clears it, which is what the banner was asking for all along'
+)
+ok(
+  eq(s13f.totalValue - s13f.totalCost, s13f.spread + s13f.outsideSpreadValue),
+  'and once more afterwards'
+)
+assertStockLotsConsistent(db)
+ok(true, 'the stock/lot invariant survived the shop shelf')
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

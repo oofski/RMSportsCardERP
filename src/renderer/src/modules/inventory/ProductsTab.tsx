@@ -13,6 +13,8 @@ import { useToast } from '../../components/Toast'
 import { Button, EmptyState, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { CategoryLogo } from './CategoryLogo'
+import { countByPriceBand, matchesPriceBand } from '@shared/priceBands'
+import { PriceBandChips } from '../../components/PriceBandChips'
 import { productMatches, structureLabel, unitLabel } from './helpers'
 import { ImageLightbox } from './ImageLightbox'
 import { ProductCasesLoader } from './ProductCases'
@@ -82,6 +84,7 @@ export function ProductsTab({
   const [stockFor, setStockFor] = useState<InventoryProduct | 'any' | null>(null)
   const [deleteFor, setDeleteFor] = useState<InventoryProduct | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [band, setBand] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkDelete, setBulkDelete] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -95,13 +98,26 @@ export function ProductsTab({
     return [...set].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
   }, [products])
 
-  const filtered = useMemo(
+  /**
+   * Category and text, before the price band — the chip counts are taken from
+   * this list so each one says how many rows a click would actually land on
+   * from where the operator is standing. Counting after the band would make
+   * every unselected chip read zero.
+   */
+  const searched = useMemo(
     () =>
       products.filter((p) => {
         if (category && p.category !== category) return false
         return productMatches(p, query)
       }),
     [products, query, category]
+  )
+
+  const bandCounts = useMemo(() => countByPriceBand(searched, (p) => p.highBid), [searched])
+
+  const filtered = useMemo(
+    () => searched.filter((p) => matchesPriceBand(p.highBid, band)),
+    [searched, band]
   )
 
   const toggleSelect = (id: string): void =>
@@ -309,6 +325,10 @@ export function ProductsTab({
         </div>
         {headerActions}
       </div>
+
+      {/* The same chips the Pricing tab draws, measured on the same figure, so
+          "Under $100" narrows to the same set of products on either screen. */}
+      <PriceBandChips value={band} counts={bandCounts} onChange={setBand} label="Market value" />
 
       {filtered.length === 0 ? (
         <EmptyState

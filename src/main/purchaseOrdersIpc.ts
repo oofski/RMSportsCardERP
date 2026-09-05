@@ -45,12 +45,17 @@ import {
   receivePurchaseOrderLines,
   scanInPurchaseOrder,
   setPartyPinned,
+  addPoAdjustment,
+  addPoPayment,
+  removePoAdjustment,
+  removePoPayment,
   setPurchaseOrderFreight,
   setPurchaseOrderRouting,
   addPurchaseOrderLines,
   updatePurchaseOrderHeader,
   updatePurchaseOrderLine,
   removePurchaseOrderLine,
+  removeTabLine,
   setPurchaseOrderPaid,
   setPurchaseOrderStatus,
   listOpenRoadshowTabs,
@@ -351,21 +356,43 @@ export function registerPurchaseOrdersIpc(): void {
     }
   )
 
-  // Who the order is from, and the note on it. No status gate: this edits
-  // nothing that has money attached, and the commonest moment to notice the
-  // supplier is missing is while filing an order that is already closed.
+  // Who the order is from, the note on it, and what the supplier charged to
+  // ship it. No status gate: the first two edit nothing with money attached,
+  // and the commonest moment to notice the supplier is missing is while filing
+  // an order that is already closed.
+  //
+  // FREIGHT is the one that moves money, and it is ungated for a reason of its
+  // own: the carrier's invoice routinely turns up AFTER the boxes do. Gating it
+  // on "not received" would lock the field at precisely the moment the real
+  // number arrives. It is safe to move late because freight never enters a FIFO
+  // cost lot — receivePoLine costs a lot at the LINE's unit price — so a
+  // correction here restates the document total and the COGS row without
+  // leaving the valuation on the shelf disagreeing with either. That is exactly
+  // the disagreement that freezes a line price once anything has landed.
   ipcMain.handle(
     IPC.poSetHeader,
     (
       _e,
-      payload: { id: string; supplier?: string | null; notes?: string | null }
+      payload: {
+        id: string
+        supplier?: string | null
+        notes?: string | null
+        shippingCost?: number | null
+      }
     ): Result<PurchaseOrderDetail> => {
       try {
         requireInvoicing()
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
-        const patch: { supplier?: string | null; notes?: string | null } = {}
+        const patch: {
+          supplier?: string | null
+          notes?: string | null
+          shippingCost?: number | null
+        } = {}
         if ('supplier' in payload) patch.supplier = payload.supplier ?? null
         if ('notes' in payload) patch.notes = payload.notes ?? null
+        // `in` rather than a truthiness check, so an explicit null clears the
+        // figure back to "nobody said" instead of being read as "leave it".
+        if ('shippingCost' in payload) patch.shippingCost = payload.shippingCost ?? null
         const res = updatePurchaseOrderHeader(payload.id, patch)
         return res.error
           ? { ok: false, error: res.error }
@@ -410,6 +437,31 @@ export function registerPurchaseOrdersIpc(): void {
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
         if (!payload?.lineId) return { ok: false, error: 'No line specified.' }
         const res = removePurchaseOrderLine(payload.id, payload.lineId)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * UNDO SOMETHING ADDED AT A SHOP.
+   *
+   * Separate from poRemoveLine because a tab line is always already checked in,
+   * so that handler's guard refuses every one of them. This reverses the receipt
+   * and removes the line together, and refuses anything already sold — see
+   * removeTabLine, where both rules live.
+   */
+  ipcMain.handle(
+    IPC.poRemoveTabLine,
+    (_e, payload: { id: string; lineId: string }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        if (!payload?.lineId) return { ok: false, error: 'No line specified.' }
+        const res = removeTabLine(payload.id, payload.lineId, actor.id)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }
@@ -522,6 +574,91 @@ export function registerPurchaseOrdersIpc(): void {
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * MONEY ON THE ORDER THAT BOUGHT NO GOODS. See PurchaseOrderAdjustment.
+   *
+   * Gated like every other write on this module. It moves the order's total and
+   * the COGS row keyed on it, so it is `requireInvoicing` rather than a read.
+   */
+  ipcMain.handle(
+    IPC.poAddAdjustment,
+    (_e, payload: { id?: unknown; amount?: unknown; note?: unknown }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const id = String(payload?.id ?? '')
+        if (!id) return { ok: false, error: 'No purchase order specified.' }
+        const amount = Number(payload?.amount)
+        if (!Number.isFinite(amount)) return { ok: false, error: 'Enter an amount.' }
+        const res = addPoAdjustment(id, amount, payload?.note == null ? null : String(payload.note), actor.id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.order as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.poRemoveAdjustment,
+    (_e, payload: { adjustmentId?: unknown }): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        const id = String(payload?.adjustmentId ?? '')
+        if (!id) return { ok: false, error: 'No adjustment specified.' }
+        const res = removePoAdjustment(id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.order as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * MONEY ACTUALLY SENT. `requireInvoicing` like the adjustment above, and for
+   * the same reason: it moves what the order owes, and it can settle it.
+   */
+  ipcMain.handle(
+    IPC.poAddPayment,
+    (_e, payload: { id?: unknown; amount?: unknown; note?: unknown }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const id = String(payload?.id ?? '')
+        if (!id) return { ok: false, error: 'No purchase order specified.' }
+        // Number() rather than a cast, so a form string that will not parse
+        // arrives as NaN and is refused by name — never as a payment of zero,
+        // which would read as a settled order that nothing was sent on.
+        const amount = Number(payload?.amount)
+        if (!Number.isFinite(amount)) return { ok: false, error: 'Enter how much was paid.' }
+        const res = addPoPayment(id, amount, payload?.note == null ? null : String(payload.note), actor.id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.order as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.poRemovePayment,
+    (_e, payload: { paymentId?: unknown }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const id = String(payload?.paymentId ?? '')
+        if (!id) return { ok: false, error: 'No payment specified.' }
+        const res = removePoPayment(id, actor.id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.order as PurchaseOrderDetail }
       } catch (err) {
         return fail(err)
       }

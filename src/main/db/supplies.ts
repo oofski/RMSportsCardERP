@@ -660,24 +660,73 @@ function getSupplyOrder(id: string): SupplyOrder | null {
 }
 
 /**
+ * HOW LONG A FINISHED SUPPLY ORDER STAYS ON THE BOARD.
+ *
+ * The owner: "once they are ... delivered [they should] disappear after 24 hours
+ * into history ... those can also be tracked". It was fourteen days, which meant
+ * a fortnight of finished orders sitting on the board between the live ones —
+ * the board stopped being a list of what needs doing.
+ *
+ * ONE CONSTANT, TWO QUERIES, AND THEY ARE EXACT COMPLEMENTS. The board keeps
+ * what is inside the window; the history keeps what has fallen out of it. If the
+ * two ever used different numbers an order would show in both or in neither, and
+ * "neither" is the one that loses a record — so the shared constant is the whole
+ * safety of this and `terminalCutoff` is the only place the boundary is computed.
+ */
+export const SUPPLY_BOARD_WINDOW_MS = 24 * 60 * 60 * 1000
+
+const terminalCutoff = (): string => new Date(Date.now() - SUPPLY_BOARD_WINDOW_MS).toISOString()
+
+/**
+ * The WHERE fragment for a terminal order still inside the board's window.
+ *
+ * A row with no timestamp on its terminal state has nothing to age out of, so it
+ * stays on the board rather than falling into history unreachable: an order that
+ * cannot say when it finished is a record to look at, not one to file away.
+ */
+const ON_BOARD = `(o.status != 'delivered' OR o.delivered_at IS NULL OR o.delivered_at >= @cutoff)
+         AND (o.status != 'cancelled' OR o.cancelled_at IS NULL OR o.cancelled_at >= @cutoff)`
+
+/**
  * Active orders (Ordered / In-transit) plus anything that reached a TERMINAL
- * stage in the last 14 days — delivered or cancelled alike.
+ * stage inside the window above — delivered or cancelled alike.
  *
  * Cancelled orders used to be filtered out entirely, which made cancelling a
  * one-way disappearance: the row stayed in the table forever with no screen
  * showing it and no way to reach deleteSupplyOrder. The Purchase Orders tab
- * renders a Cancelled lane, so the rows have to reach it.
+ * renders a Cancelled lane, so the rows have to reach it — and now the history
+ * catches them afterwards, so shortening the window strands nothing.
  */
 export function listSupplyOrders(): SupplyOrder[] {
-  const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
+  const cutoff = terminalCutoff()
+  const rows = getDb()
+    .prepare(`${SUPPLY_ORDER_SELECT} WHERE ${ON_BOARD} ORDER BY o.created_at DESC`)
+    .all({ cutoff }) as SupplyOrderRow[]
+  return rows.map(toSupplyOrder)
+}
+
+/**
+ * Everything that has LEFT the board — the exact complement of the query above.
+ *
+ * Written as `NOT (on board)` rather than as its own set of conditions, because
+ * the moment the two are spelled out separately they can disagree, and the way
+ * they disagree is an order that is in neither list. A finished purchase that
+ * exists in the database and appears on no screen is the failure this whole
+ * feature is meant to prevent, not create.
+ *
+ * Newest finish first: what left the board most recently is what somebody is
+ * most likely looking for.
+ */
+export function listSupplyOrderHistory(limit = 200): SupplyOrder[] {
+  const cutoff = terminalCutoff()
   const rows = getDb()
     .prepare(
       `${SUPPLY_ORDER_SELECT}
-       WHERE (o.status != 'delivered' OR o.delivered_at IS NULL OR o.delivered_at >= @cutoff)
-         AND (o.status != 'cancelled' OR o.cancelled_at IS NULL OR o.cancelled_at >= @cutoff)
-       ORDER BY o.created_at DESC`
+        WHERE NOT (${ON_BOARD})
+        ORDER BY COALESCE(o.delivered_at, o.cancelled_at, o.created_at) DESC
+        LIMIT @limit`
     )
-    .all({ cutoff }) as SupplyOrderRow[]
+    .all({ cutoff, limit: Math.max(1, Math.min(1000, Math.round(limit))) }) as SupplyOrderRow[]
   return rows.map(toSupplyOrder)
 }
 

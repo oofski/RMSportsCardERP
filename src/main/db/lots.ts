@@ -828,3 +828,207 @@ export function assertStockLotsConsistent(db: Database): void {
     }
   }
 }
+
+/**
+ * MOVE COST LAYERS FROM ONE SHELF TO ANOTHER, oldest first.
+ *
+ * The engine under `moveStock`. A cost layer is not a fact about a shelf — it is
+ * a fact about a specific set of units: what they cost, when they arrived, and
+ * which purchase order bought them. Carrying those units across the country
+ * changes none of that, so the layer travels with them rather than being
+ * consumed here and re-invented there.
+ *
+ * ## Why not consume and re-create
+ *
+ * Because that is how the money is lost, and it is the workaround the routing
+ * refusal used to advise. `consumeFifo` at the source draws the layer down and
+ * `createLot` at the destination opens a new one at whatever the destination
+ * shelf is already carrying (see `shelfBasis`). A $400 case landing on a shelf
+ * averaging $150 becomes a $150 case, permanently — a layer's cost is never
+ * re-derived — and $250 turns into profit the next time it sells.
+ *
+ * ## THE THREE THINGS THAT TRAVEL
+ *
+ *   unit_cost    what these units cost. The whole point.
+ *   received_at  when they arrived. Keeps their place in the FIFO queue, so a
+ *                case bought in March is still consumed before one bought in
+ *                June rather than jumping to the back of the line on arrival.
+ *   the PO link  `po_line_receipts`, so a case bought at a price nobody knew can
+ *                be brought home and priced afterwards. Without this,
+ *                `setPurchaseOrderLinePrice` would re-cost a layer that no
+ *                longer holds anything, and the units now at RM would stay at
+ *                zero for ever — which is the exact shape of a roadshow case,
+ *                and therefore the case this has to get right.
+ *
+ * ## Whole layer or split
+ *
+ * A layer nothing has been sold from, moving in its entirety, simply changes
+ * address: one UPDATE, its id unchanged, so every row already pointing at it
+ * keeps pointing at it. Anything else splits — the source shrinks by what left
+ * (BOTH counts, because those units were neither received nor sold here any
+ * more) and a sibling opens at the destination holding exactly them.
+ *
+ * Shrinking `qty_received` as well as `qty_remaining` is what keeps the layer
+ * honest about its own history: 5 received here and 2 sold here, with 3 driven
+ * home, leaves 2 received and 0 remaining — true — rather than 5 received and 0
+ * remaining, which reads as five sold and would tell
+ * `setPurchaseOrderLinePrice` this line had been drawn down when it had not.
+ *
+ * Returns what moved, layer by layer, so the caller can write the ledger from
+ * the same numbers the shelves were changed by.
+ *
+ * MUST be called inside the caller's transaction.
+ */
+export function relocateLots(
+  db: Database,
+  productId: string,
+  from: string,
+  to: string,
+  qty: number
+): LotSlice[] {
+  let need = roundQty(qty, allowsFractionalQty(db, productId))
+  if (!(need > 0)) return []
+  const lots = db
+    .prepare(
+      `SELECT id, qty_received, qty_remaining, unit_cost, received_at, source, note, vendor
+         FROM inventory_lots
+        WHERE product_id = ? AND location = ? AND qty_remaining > 0
+        ORDER BY received_at ASC, rowid ASC`
+    )
+    .all(productId, from) as Array<{
+    id: string
+    qty_received: number
+    qty_remaining: number
+    unit_cost: number
+    received_at: string
+    source: string
+    note: string | null
+    vendor: string | null
+  }>
+
+  const relocate = db.prepare('UPDATE inventory_lots SET location = ? WHERE id = ?')
+  const shrink = db.prepare(
+    'UPDATE inventory_lots SET qty_received = ?, qty_remaining = ? WHERE id = ?'
+  )
+  const open = db.prepare(
+    `INSERT INTO inventory_lots
+       (id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source, note, vendor, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+  const ts = nowIso()
+  const moved: LotSlice[] = []
+
+  for (const lot of lots) {
+    if (need <= QTY_EPS) break
+    const take = normQty(Math.min(need, lot.qty_remaining))
+    if (!(take > 0)) continue
+
+    // The whole of an untouched layer: it changes address and keeps its id, so
+    // receipts, txn slices and provenance all follow it for free.
+    const whole = take >= lot.qty_remaining - QTY_EPS && lot.qty_received <= lot.qty_remaining + QTY_EPS
+    if (whole) {
+      relocate.run(to, lot.id)
+      moved.push({ lotId: lot.id, qty: take, unitCost: lot.unit_cost })
+      need = normQty(need - take)
+      continue
+    }
+
+    const newId_ = newId()
+    shrink.run(normQty(lot.qty_received - take), normQty(lot.qty_remaining - take), lot.id)
+    open.run(
+      newId_,
+      productId,
+      to,
+      take,
+      take,
+      lot.unit_cost,
+      // ITS OWN ARRIVAL DATE, not today's. See the note above on FIFO order.
+      lot.received_at,
+      lot.source,
+      lot.note,
+      lot.vendor,
+      ts
+    )
+    splitLotReceipts(db, lot.id, newId_, take)
+    moved.push({ lotId: newId_, qty: take, unitCost: lot.unit_cost })
+    need = normQty(need - take)
+  }
+
+  if (need > quantizationSlack(moved.length)) {
+    throw new Error(`Only ${normQty(roundQty(qty, true) - need)} of ${qty} could be moved from ${from}.`)
+  }
+  return moved
+}
+
+/**
+ * Carry a purchase order's receipt across when a layer is split by a move.
+ *
+ * `po_line_receipts` is what `setPurchaseOrderLinePrice` walks to find the
+ * layers a line opened, and what `provenance` sums to work out how much of a
+ * line has arrived. Both have to keep working after a case is driven home, and
+ * they need opposite things from this: the price path needs a row pointing at
+ * the NEW layer, and the provenance sum needs the total per line to be
+ * unchanged. Moving quantity between two rows of the same line does both.
+ *
+ * Walks the source lot's receipts oldest first and takes from each until the
+ * moved quantity is covered — a lot normally has exactly one, and the loop is
+ * for the case where a backfill or a re-receipt left it with more.
+ *
+ * A row that gives up ALL of its quantity is deleted rather than left at zero: a
+ * receipt of nothing is not a receipt, and it would show on the provenance panel
+ * as a delivery that never happened.
+ *
+ * ## THE NEW ROW KEEPS THE OLD ROW'S LOCATION, and that is not an oversight
+ *
+ * It shipped stamping the DESTINATION, which reads as "where these units are"
+ * and is the wrong question. A receipt is a historical event: these units were
+ * handed over AT THAT SHOP, and driving them home on Thursday does not change
+ * where they arrived on Tuesday. `shopShelf` counts a shop's receipts to answer
+ * "what has this shop handed over", and with the destination stamped, moving a
+ * case home silently reduced what the shop was recorded as having sold us —
+ * which is the beginning of an argument with a supplier that the app would lose.
+ *
+ * Nothing reads this column as a live position. The reversal paths follow the
+ * LOT, which does move; see removeTabLine, which reads lot.location precisely so
+ * it takes a case off whatever shelf it is actually on now.
+ *
+ * MUST be called inside the caller's transaction.
+ */
+function splitLotReceipts(db: Database, fromLotId: string, toLotId: string, qty: number): void {
+  const rows = db
+    .prepare(
+      `SELECT id, po_id, po_line_id, quantity, allocation_id, location
+         FROM po_line_receipts
+        WHERE lot_id = ?
+        ORDER BY created_at ASC, rowid ASC`
+    )
+    .all(fromLotId) as Array<{
+    id: string
+    po_id: string
+    po_line_id: string
+    quantity: number
+    allocation_id: string | null
+    location: string | null
+  }>
+  if (rows.length === 0) return
+
+  const ts = nowIso()
+  const cut = db.prepare('UPDATE po_line_receipts SET quantity = ? WHERE id = ?')
+  const drop = db.prepare('DELETE FROM po_line_receipts WHERE id = ?')
+  const add = db.prepare(
+    `INSERT INTO po_line_receipts
+       (id, po_id, po_line_id, lot_id, quantity, allocation_id, location, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+  let need = normQty(qty)
+  for (const r of rows) {
+    if (need <= QTY_EPS) break
+    const take = normQty(Math.min(need, r.quantity))
+    if (!(take > 0)) continue
+    const left = normQty(r.quantity - take)
+    if (left <= QTY_EPS) drop.run(r.id)
+    else cut.run(left, r.id)
+    add.run(newId(), r.po_id, r.po_line_id, toLotId, take, r.allocation_id, r.location, ts)
+    need = normQty(need - take)
+  }
+}

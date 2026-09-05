@@ -141,8 +141,20 @@ export function DeliveryPanel({
           const dropped = l.quantity - l.qtyReceivable
           return (
             <div className={`po-deliv-row ${n > 0 ? 'has' : ''}`} key={l.id}>
-              <span className="po-deliv-name" title={l.productName}>
-                {l.productName}
+              {/* THE SKU UNDER THE NAME, because the name alone does not
+                  identify the box being counted.
+                  These names run long and identical for the first forty
+                  characters — "2026 Topps Chrome WWE Wrestling Hobby 12-Box…"
+                  and "2026 Topps Chrome WWE Wrestling Delight 6-Box…" ellipsis
+                  to the same string in this column. Somebody scanning a part
+                  delivery is holding a carton with a SKU printed on it, and
+                  that is the one field that tells two boxes apart at a glance.
+                  The full name stays on the title so hovering still gives it. */}
+              <span className="po-deliv-id">
+                <span className="po-deliv-name" title={l.productName}>
+                  {l.productName}
+                </span>
+                {l.sku && <span className="po-deliv-sku mono">{l.sku}</span>}
               </span>
               <span className="po-deliv-left mono">
                 {left} left

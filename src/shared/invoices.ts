@@ -474,6 +474,37 @@ export function isInvoicePaid(invoice: {
 }
 
 /**
+ * Is this buyer still going to pay us, whatever stage the order is standing in?
+ *
+ * NOT THE NEGATION OF `isInvoicePaid`, and the gap between the two is a real
+ * defect that lived in the Awaiting payment tile. That function answers "has
+ * the money arrived", where a VOID is correctly `false` — no money has arrived
+ * on a voided invoice and none ever will. Read as "so it must still be owed",
+ * the same `false` turns every invoice Intuit voided into money the owner is
+ * told to expect.
+ *
+ * Owed is a THIRD state, and it needs both halves said out loud:
+ *
+ *   · VOIDED, here or in QuickBooks, is owed by nobody. Voiding is how a
+ *     document stops being a claim, so a figure that still counted it would
+ *     rise every time somebody cancelled a sale properly.
+ *   · PAID is owed by nobody, whichever record says so.
+ *
+ * Everything else counts, in EVERY column, drafts included — an order being
+ * built is money not yet in, and the owner asked for the figure to hold
+ * whatever stage a sale is standing in.
+ */
+export function invoiceIsOwed(invoice: {
+  status?: InvoiceStatus | null
+  paidAt?: string | null
+  qboPaidAt?: string | null
+  qboVoided?: boolean | null
+}): boolean {
+  if (invoice.status === 'void' || invoice.qboVoided) return false
+  return !isInvoicePaid(invoice)
+}
+
+/**
  * Which moves are legal.
  *
  * Forward-only along the pipeline, plus void from anywhere that is not already
@@ -523,6 +554,21 @@ export interface InvoicePaymentInput {
   readyToShip?: boolean
   /** Move the card to Paid as well. Off for a deposit against a bigger order. */
   markPaid?: boolean
+  /**
+   * Did the money arrive BEFORE anything shipped?
+   *
+   * Straight through to `paid_up_front`, whose meaning is exactly that sentence.
+   * It used to be written as 1 unconditionally, because the only door onto this
+   * call was a dialog called "Paid up front…" — so the flag and the door agreed
+   * by construction. Now that one Mark paid button serves both terms, a buyer
+   * who pays ON DELIVERY reaches the same call, and writing the flag for them
+   * would state something nobody claimed.
+   *
+   * DEFAULTS TO TRUE when absent, which is what every existing caller means and
+   * what every stored row already says. See paidAction in @shared/orderActions
+   * for how the card decides.
+   */
+  upFront?: boolean
 }
 
 export const PAYMENT_REFERENCE_MAX = 120
@@ -808,6 +854,18 @@ export interface Invoice {
   qboStatusCheckedAt: string | null
   qboStatusAttemptedAt: string | null
   qboStatusError: string | null
+  /**
+   * The payment THIS APP recorded in QuickBooks, if it has.
+   *
+   * Its presence is an interlock, not a label: paymentPlan() refuses to post
+   * while it is set, because a retry after a relay timeout is exactly how the
+   * same money gets banked twice. See @shared/quickbooksPayment.
+   */
+  qboPaymentId: string | null
+  qboPaymentPostedAt: string | null
+  /** Why the last attempt failed. Never blocks the next one. */
+  qboPaymentError: string | null
+  qboPaymentAttemptedAt: string | null
   /**
    * WHEN OUR OWN TOTAL LAST MOVED, and null on an order nobody has edited.
    *
@@ -1099,6 +1157,27 @@ export interface NewInvoiceLine {
    * Only an OPEN roadshow order is ever offered; see @shared/poStock.
    */
   sourcePoId?: string | null
+  /**
+   * THIS LINE'S UNITS SPREAD ACROSS SEVERAL SHELVES, at creation.
+   *
+   * The owner, looking at three shelves each holding one and a line for three:
+   * "I want to be able to add each of these here to sum to 3." Splitting was
+   * already possible — `setInvoiceLineRouting` writes exactly these rows and the
+   * cost consumption has always honoured them per slice — but only AFTER the
+   * order existed, through a second screen. So the ordinary case, which is
+   * knowing where the units come from while the order is being written, meant
+   * create-then-go-and-fix.
+   *
+   * OMITTED OR EMPTY IS THE NORMAL CASE and writes no rows at all, which is the
+   * whole back-compat mechanism: no rows means one implicit slice of the whole
+   * quantity at `destination`, exactly as every sales order ever written behaves.
+   * See @shared/invoiceAllocations, which owns that rule.
+   *
+   * The quantities must sum to the line's `quantity`. They are checked in main
+   * rather than trusted, because a renderer is a convenience and these decide
+   * which shelves get drawn down.
+   */
+  allocations?: Array<{ location: string; quantity: number }> | null
 }
 
 export interface NewInvoice {
@@ -1163,6 +1242,106 @@ export function lineAmount(quantity: number, rate: number): number {
 /** The invoice total: the sum of what was AGREED, not of quantity × rate. */
 export function invoiceTotal(lines: Array<{ amount: number }>): number {
   return money(lines.reduce((sum, l) => sum + (Number(l.amount) || 0), 0))
+}
+
+/**
+ * The three money fields a QuickBooks line has to carry, made to agree.
+ *
+ * ## The problem this exists for
+ *
+ * This app lets a line's amount disagree with quantity × rate on purpose — see
+ * the note on `InvoiceLine.amount`: three cases listed at $6,500 and talked down
+ * to a flat $19,000 is an ordinary Tuesday, and the agreed number is the fact.
+ *
+ * QUICKBOOKS DOES NOT ALLOW THAT. It re-does the arithmetic on every line and
+ * refuses the entire invoice when it disagrees, with a message that quotes the
+ * agreed figure back and explains nothing:
+ *
+ *     Amount calculation incorrect in the request.
+ *     Amount is not equal to UnitPrice * Qty. Supplied value: 19,000
+ *
+ * So the negotiated invoices — the interesting ones — were the only ones that
+ * could not be posted, and the failure looked like a connection fault because
+ * the next invoice went through fine.
+ *
+ * ## What this does instead
+ *
+ * Works the unit price back OUT of the agreed total, which is what somebody
+ * does on paper: $19,000 for three cases is $6,333.33 each. That keeps the
+ * total exact — the total is what the buyer owes — and lets the per-unit price
+ * absorb the untidiness, which is the right way round.
+ *
+ * THE EXTRA DECIMALS ARE THE WHOLE TRICK, and dropping them re-breaks this.
+ * $19,000 ÷ 3 does not land on a cent: $6,333.33 × 3 is $18,999.99 and
+ * $6,333.34 × 3 is $19,000.02, so NO two-decimal unit price can multiply back
+ * to the agreed total, and rounding to cents here would send QuickBooks the
+ * same contradiction in a different shape. QuickBooks holds a unit price to
+ * five decimals and checks the product only to the cent, which is exactly the
+ * room needed: $6,333.33333 × 3 = $18,999.99999, which is $19,000.00 to the
+ * cent. It prints as $6,333.33.
+ *
+ * The order of attempts matters:
+ *
+ *   1. ALREADY AGREES — send it untouched. The overwhelming majority of lines,
+ *      and this must not perturb them: a line that posts correctly today has to
+ *      produce a byte-identical payload tomorrow.
+ *   2. DIVIDES CLEANLY — $19,000 over 8 is $2,375.00 exactly. Prefer the tidy
+ *      two-decimal price when there is one; nobody wants trailing zeros on a
+ *      price that was never untidy.
+ *   3. NEEDS THE DECIMALS — the $6,333.33333 case above.
+ *   4. CANNOT BE DONE — sell it as one unit at the agreed price, and say the
+ *      real count in the description so it is not simply lost. Only reachable
+ *      at quantities in the thousands, where five decimals stop being enough to
+ *      absorb the remainder; kept because "cannot happen" is how a refused
+ *      invoice gets shipped.
+ */
+export interface QboLineMoney {
+  Qty: number
+  UnitPrice: number
+  Amount: number
+  /**
+   * Did the count have to be collapsed to one to make the sum tie out?
+   *
+   * Reported rather than handled silently: the caller owes the reader a
+   * description saying how many units it really was.
+   */
+  collapsed: boolean
+}
+
+/** Unit prices carry five decimals; QuickBooks stores no more than that. */
+const UNIT_DP = 5
+
+const roundTo = (n: number, dp: number): number => {
+  const f = 10 ** dp
+  return Math.round(n * f) / f
+}
+
+export function qboLineMoney(quantity: number, rate: number, amount: number): QboLineMoney {
+  const amt = money(Number(amount) || 0)
+  const qty = Number(quantity) || 0
+  const listed = money(Number(rate) || 0)
+
+  // 1. Already consistent. Includes the zero-quantity, zero-amount line, which
+  //    is arithmetically fine and which QuickBooks accepts.
+  if (money(qty * listed) === amt) {
+    return { Qty: qty, UnitPrice: listed, Amount: amt, collapsed: false }
+  }
+
+  if (qty > 0) {
+    // 2. A clean per-unit price, when the division gives one.
+    const cents = roundTo(amt / qty, 2)
+    if (money(cents * qty) === amt) {
+      return { Qty: qty, UnitPrice: cents, Amount: amt, collapsed: false }
+    }
+    // 3. The remainder lives in the extra decimals.
+    const fine = roundTo(amt / qty, UNIT_DP)
+    if (money(fine * qty) === amt) {
+      return { Qty: qty, UnitPrice: fine, Amount: amt, collapsed: false }
+    }
+  }
+
+  // 4. One unit at the agreed price. Always ties out, by construction.
+  return { Qty: 1, UnitPrice: amt, Amount: amt, collapsed: true }
 }
 
 // ---------------------------------------------------------------------------
@@ -1944,14 +2123,23 @@ export function toQboInvoice(
     ...(invoice.memo ? { PrivateNote: invoice.memo } : {}),
     Line: invoice.lines.map((l) => {
       const ref = resolveLineItemRef(l, itemRefs, refs.itemsBySku)
+      // The agreed amount is the fact and goes over untouched; the unit price
+      // is worked back out of it so QuickBooks' own arithmetic agrees. See
+      // `qboLineMoney` for why a two-decimal price is not always enough.
+      const sums = qboLineMoney(l.quantity, l.rate, l.amount)
+      // Only when the count could not survive the sum — which is the one thing
+      // this conversion can lose, so it is written down where the buyer and the
+      // owner can both still read it rather than quietly dropped.
+      const lost = sums.collapsed && l.quantity > 1 ? `${l.quantity} units` : null
+      const description = [l.description, lost].filter(Boolean).join(' — ')
       return {
         DetailType: 'SalesItemLineDetail' as const,
-        Amount: money(l.amount),
-        ...(l.description ? { Description: l.description } : {}),
+        Amount: sums.Amount,
+        ...(description ? { Description: description } : {}),
         SalesItemLineDetail: {
           ItemRef: { value: ref?.id ?? '', ...(ref?.name ? { name: ref.name } : {}) },
-          Qty: l.quantity,
-          UnitPrice: l.rate,
+          Qty: sums.Qty,
+          UnitPrice: sums.UnitPrice,
           ...(onLine && classRef ? { ClassRef: classRef } : {})
         }
       }
@@ -2069,6 +2257,15 @@ export interface QboInvoicePayment {
 export interface QboInvoiceObservation {
   qboId: string
   docNumber: string | null
+  /**
+   * Who QuickBooks says the invoice belongs to.
+   *
+   * Carried because a PAYMENT has to name a customer — QuickBooks refuses one
+   * that does not — and the invoice is the only place this app can learn it
+   * without a second round trip. Null when QuickBooks did not say, which is a
+   * refusal to post rather than a licence to guess. See @shared/quickbooksPayment.
+   */
+  customerId: string | null
   /** 'NotSet' | 'NeedToSend' | 'EmailSent'. Kept as a string: it is theirs. */
   emailStatus: string | null
   /** DeliveryInfo.DeliveryTime — when QUICKBOOKS sent it, not when it was read. */
@@ -2813,6 +3010,31 @@ export interface WholesaleSaleRow {
   margin: number
   /** False for a pre-v68 line, whose layers cannot be recovered. */
   costKnown: boolean
+  /**
+   * THE COST IS KNOWABLE AND NOBODY HAS SAID IT YET — a roadshow case sold
+   * before the shop gave a price.
+   *
+   * A third state, and it has to be its own. `costKnown` false means the layers
+   * are gone and no figure will ever arrive; this means the layer is right there
+   * with a placeholder zero on it, waiting for somebody to type the number into
+   * the tab. Folding the two together would either give up on money that is
+   * still coming, or report a 100% margin on a case that plainly cost something.
+   *
+   * Left out of the priced totals for exactly the reason the legacy rows are:
+   * a cost of nothing counted as a cost is the one failure a finance screen must
+   * not have. Unlike those, this one CLEARS ITSELF — pricing the tab line
+   * re-costs the layer and this sale with it (see restateConsumedCost), and the
+   * row joins the totals with a real margin.
+   */
+  costPending: boolean
+  /**
+   * The tab to go and price, when `costPending`. Null otherwise.
+   *
+   * Named rather than counted, on the same reasoning as the roadshow board's
+   * footer: "PO-0452" is something somebody can go and open, and "an unpriced
+   * purchase order" is not.
+   */
+  pendingPoNumber: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -2911,11 +3133,53 @@ export function salesOrderKindOf(invoice: {
   return 'mixed'
 }
 
-/** True when any part of this sale is a dropship — either routing or a link. */
+/**
+ * IS THERE A PURCHASE ORDER OWED FOR THIS SALE?
+ *
+ * The gate on the "Now buy the goods" prompt, and its ONLY caller — so it is
+ * named for the badge it used to feed and asked for the question it actually
+ * answers. Both readings agree on everything except one case, and that case is
+ * an ordinary week here.
+ *
+ * ## WHY A ROADSHOW SALE HAS TO BE EXCLUDED
+ *
+ * The owner, on the prompt appearing over a sale he had just written: "what does
+ * this mean ... let me know what the issue is here."
+ *
+ * `dropshipUnits` counts every unit going somewhere that is not RM or AM, and
+ * that deliberately includes a roadshow shop — see the note on `remoteUnits`,
+ * and the `drop_units` column it sits beside. Those units are ours: bought,
+ * costed, standing on a shelf, and merely three states away. Nothing about them
+ * is owed to a supplier.
+ *
+ * So selling out of Texas or New York tripped this, the prompt opened, and it
+ * then said "There is nothing here to buy" — because the modal reads
+ * `line.dropship`, which asks `destinationHoldsStock` and correctly answers no.
+ * Two reads of one order, disagreeing on screen, in a box demanding an answer.
+ *
+ * ## The subtraction is the whole fix
+ *
+ * `dropshipUnits` is everything not on a home shelf; `remoteUnits` is the part
+ * of that which IS one of our own registered shelves. What is left is going to
+ * somewhere that is not ours at all — a buyer's address, on a supplier's van —
+ * and that is exactly the thing a purchase order buys.
+ *
+ * A LINK STILL COUNTS with no units at all, which is `salesOrderKindOf`'s rule
+ * for an empty draft raised from a purchase, kept unchanged.
+ */
 export function isDropshipSale(invoice: {
   stockUnits: number
   dropshipUnits: number
+  /**
+   * REQUIRED, not optional with a zero default. An optional one would let a
+   * caller that simply forgot it fall silently back to the behaviour this fixes
+   * — and the symptom is a modal appearing over an order it has nothing to say
+   * about, which nobody would trace back to a missing field.
+   */
+  remoteUnits: number
   sourcePoId: string | null
 }): boolean {
-  return salesOrderKindOf(invoice) !== 'stock'
+  const away = Math.max(0, Number(invoice.remoteUnits) || 0)
+  const supplied = Math.max(0, (Number(invoice.dropshipUnits) || 0) - away)
+  return salesOrderKindOf({ ...invoice, dropshipUnits: supplied }) !== 'stock'
 }
